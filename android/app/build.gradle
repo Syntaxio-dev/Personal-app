@@ -1,6 +1,8 @@
 apply plugin: 'com.android.application'
 
 def runNumber = (System.getenv("GITHUB_RUN_NUMBER") ?: "1") as int
+// the app version comes from "version" in package.json (1.2.0 is shown as 1.2)
+def appVersion = new groovy.json.JsonSlurper().parse(file('../../package.json')).version.tokenize('.').take(2).join('.')
 
 android {
     namespace = "com.personal.app"
@@ -11,13 +13,18 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         // CI sets GITHUB_RUN_NUMBER so every build has a higher versionCode (Android only updates upward)
         versionCode = runNumber
-        versionName = "1.1.${runNumber}"
+        versionName = appVersion
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
+    }
+    // lint must never block a personal release build
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
     }
     signingConfigs {
         // Same key on every build is what lets a new APK install over the old one and keep its data.
@@ -36,6 +43,7 @@ android {
             if (System.getenv("KEYSTORE_FILE")) signingConfig signingConfigs.persistent
         }
         release {
+            if (System.getenv("KEYSTORE_FILE")) signingConfig signingConfigs.persistent
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

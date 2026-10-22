@@ -34,11 +34,17 @@ jobs:
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-      - run: chmod +x gradlew && ./gradlew assembleDebug
+      - run: chmod +x gradlew && ./gradlew assembleRelease
         working-directory: android
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      - name: Name the APK after the app version
+        id: apk
+        run: |
+          V=$(node -p "require('./package.json').version.split('.').slice(0, 2).join('.')")
+          cp android/app/build/outputs/apk/release/app-release.apk "Prysm-v$V.apk"
+          echo "name=Prysm-v$V" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
-          name: personal-app-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: ${{ steps.apk.outputs.name }}
+          path: ${{ steps.apk.outputs.name }}.apk

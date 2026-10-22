@@ -2,5 +2,8 @@
   "appId": "com.personal.app",
   "appName": "Prysm",
   "backgroundColor": "#000000",
-  "webDir": "dist"
+  "webDir": "dist",
+  "android": {
+    "webContentsDebuggingEnabled": false
+  }
 }

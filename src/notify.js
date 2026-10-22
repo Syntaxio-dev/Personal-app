@@ -6,6 +6,13 @@ import { billActive, dueDate, lentLeft, salaryAdded, salaryDate, shiftMonth } fr
 
 const CHANNEL = 'prysm';
 
+// On the phone the nightly planner is a native popup (see PlanScheduler.java); main.js turns this on and
+// hands over a hook that sends the plan time and tomorrow's tasks to the native side on every sync.
+let nativePlan = false;
+let syncHook = null;
+export const setNativePlan = (on) => { nativePlan = on; };
+export const setSyncHook = (fn) => { syncHook = fn; };
+
 // Overdue tasks (2+ days old) nag at these times, every day, until they are done.
 export const NAG_SLOTS = ['09:00', '13:00', '17:00', '21:00'];
 const NAG_TEXT = [
@@ -53,6 +60,7 @@ export async function openExactAlarmSettings() {
 // Rebuilds every scheduled notification from the saved data, so the schedule always matches the app.
 export async function syncNotifications() {
   if (!Capacitor.isNativePlatform()) return;
+  if (syncHook) { try { await syncHook(); } catch (e) { /* native side unavailable */ } }
   try {
     if ((await LocalNotifications.checkPermissions()).display !== 'granted') return;
     const pending = await LocalNotifications.getPending();
@@ -63,7 +71,7 @@ export async function syncNotifications() {
     const now = new Date();
     const list = [];
 
-    if (st.planOn) {
+    if (st.planOn && !nativePlan) {
       const { hour, minute } = planTime(st);
       list.push({
         id: 1, channelId: CHANNEL, title: 'Plan tomorrow',

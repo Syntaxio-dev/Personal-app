@@ -13,13 +13,15 @@ import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import Chart from 'chart.js/auto';
 import * as db from './db.js';
+import pkg from '../package.json';
+import logoUrl from './assets/logo.png';
 import * as att from './attendance.js';
 import * as money from './money.js';
 import { createMoney } from './moneyui.js';
 import * as G from './goals.js';
 import { createGoals } from './goalsui.js';
 import { pad, dateStr, today, addDays, daysBetween, dayName, dayLabel, fmtTime } from './dates.js';
-import { syncNotifications, initNotifications, planTime, exactAlarmsAllowed, openExactAlarmSettings, NAG_SLOTS } from './notify.js';
+import { syncNotifications, initNotifications, planTime, exactAlarmsAllowed, openExactAlarmSettings, NAG_SLOTS, setNativePlan, setSyncHook } from './notify.js';
 
 const CATEGORIES = ['Food', 'Groceries', 'Petrol', 'Vehicle', 'Travel', 'Bills', 'Rent', 'Shopping', 'Health', 'Fun', 'Family', 'Friends', 'Loan EMI', 'Other'];
 const STATUS = { P: 'Present', A: 'Absent', H: 'Half-day', L: 'Leave', O: 'Holiday' };
@@ -54,7 +56,7 @@ const ICON = {
   down: '<path d="M6 10l6 6 6-6"/>',
 };
 const svg = (k) => `<svg viewBox="0 0 24 24">${ICON[k]}</svg>`;
-const APP_VERSION = '1.1';
+const APP_VERSION = pkg.version.split('.').slice(0, 2).join('.');
 const TAB_ORDER = ['home', 'money', 'att', 'todo', 'goals'];
 const TABS = [['home', 'Dashboard'], ['money', 'Money'], ['att', 'Attendance'], ['todo', 'Tasks'], ['goals', 'Goals']];
 const DASH_WIDGETS = {
@@ -240,8 +242,29 @@ async function syncPayments() {
     });
     if (items && items.length) await db.save();
   } catch (e) { /* ignore */ }
+  let openPlan = false;
+  try {
+    const planned = await PaymentCapture.takePlanned();
+    const S = db.get();
+    (planned.items || []).forEach((p) => {
+      if (!p.title) return;
+      S.todos.push({ id: db.uid(), title: String(p.title).slice(0, 200), date: p.date || addDays(today(), 1), time: '', pri: ['high', 'med', 'low'].includes(p.pri) ? p.pri : 'med', done: false, doneAt: 0, goalId: '' });
+    });
+    if (planned.items && planned.items.length) { await db.save(); syncNotifications(); }
+    openPlan = !!planned.openPlan;
+  } catch (e) { /* older native build */ }
   render();
-  if (db.get().inbox.length && $('modal').hidden) showInboxItem();
+  if (openPlan && $('modal').hidden) showPlan();
+  else if (db.get().inbox.length && $('modal').hidden) showInboxItem();
+}
+
+// the native plan popup needs the time, the name and what is already planned for tomorrow
+async function pushPlan() {
+  const S = db.get(), st = S.settings;
+  const { hour, minute } = planTime(st);
+  const date = addDays(today(), 1);
+  const titles = S.todos.filter((x) => x.date === date && !x.done).map((x) => x.title).slice(0, 30);
+  await PaymentCapture.setPlan({ on: !!st.planOn, hour, minute, name: st.name || '', date, titles });
 }
 
 function showInboxItem() {
@@ -388,7 +411,7 @@ const views = {
     const banner = overdue.length && todoFilter !== 'done'
       ? `<div class="banner ${urgent ? 'urgent' : ''}">${dot(urgent ? '#f87171' : '#fbbf24')}<div><b>${overdue.length} overdue task${overdue.length > 1 ? 's' : ''}</b><span>${urgent ? `${urgent} urgent: you get ${NAG_SLOTS.length} alerts a day until they are done.` : 'One miss is a mistake. Clear it today.'}</span></div></div>`
       : '';
-    const chips = `<div class="chips scroll">${chip('pending', 'Pending', pending.length)}${chip('today', 'Today', upToToday.length)}${chip('done', 'Completed')}${chip('report', 'Report')}</div>`;
+    const chips = `<div class="chips subtabs scroll">${chip('pending', 'Pending', pending.length)}${chip('today', 'Today', upToToday.length)}${chip('done', 'Completed')}${chip('report', 'Report')}</div>`;
     if (todoFilter === 'report') return chips + taskReport(S);
     const body = todoFilter === 'done' ? doneList(S) : pendingList(todoFilter === 'today' ? upToToday : pending, t);
     return top + banner + chips + body;
@@ -403,9 +426,13 @@ const views = {
     const capture_ = native
       ? `<div class="card"><h2>Payment capture</h2>
           ${stat(capture.notif, 'Notification access')}${stat(capture.overlay, 'Display over other apps')}${stat(capture.notifs, 'Notifications allowed')}${stat(capture.battery, 'Battery unrestricted')}
-          <div class="grid2" style="margin-top:14px"><button class="btn" data-act="enableCapture">Fix / set up</button><button class="btn alt" data-act="capTest">Test popup</button></div>
-          <button class="btn alt" data-act="capLog" style="margin-top:10px">View capture log</button>
-          <div class="muted" style="margin-top:10px">The test popup appears after 5 seconds, so you can switch to PhonePe first and see it show over that app.</div></div>`
+          <div style="margin-top:8px">${row('Keep Prysm running', 'Needed on iQOO, Vivo, Xiaomi and Oppo, or popups stop working', 'keepAlive')}</div>
+          <button class="btn" style="margin-top:14px" data-act="enableCapture">Fix / set up</button>
+          <span class="label" style="margin-top:18px">Test the popups</span>
+          <div class="grid2"><button class="btn alt" data-act="capTestNow">Expense now</button><button class="btn alt" data-act="capTest">Over another app</button></div>
+          <button class="btn alt" style="margin-top:10px" data-act="capPlanTest">Plan tomorrow popup</button>
+          <div class="grid2" style="margin-top:10px"><button class="btn alt" data-act="capAppSettings">App settings</button><button class="btn alt" data-act="capLog">Capture log</button></div>
+          <div class="muted" style="margin-top:12px;line-height:1.5">If "Expense now" works but the other tests do not, your phone is freezing Prysm in the background. On iQOO / Vivo open App settings and allow <b>Display pop-up windows</b>, <b>Display pop-up windows while running in the background</b> and <b>Autostart</b>, and set Battery to <b>No restrictions</b>.</div></div>`
       : `<div class="card"><h2>Payment capture</h2><div class="sec">Available in the installed Android app.</div></div>`;
     return `
       <div class="card"><h2>Profile</h2><span class="label">Your name</span><input id="s-name" value="${esc(st.name)}" placeholder="What should Prysm call you?" maxlength="30" autocomplete="off" style="margin-bottom:0"></div>
@@ -417,7 +444,7 @@ const views = {
         <button class="capsule set" data-act="setSleep">${svg('clock')}<span>${fmtTime(st.sleep)}</span></button>
         <span class="label" style="margin-top:16px">Remind me before sleep</span>
         <div class="chips">${[15, 30, 60].map((n) => `<button class="${Number(st.planLead) === n ? 'on' : ''}" data-act="setLead" data-v="${n}">${n} min</button>`).join('')}</div>
-        <div class="muted">${st.planOn ? `Reminder at ${fmtTime(`${pad(pt.hour)}:${pad(pt.minute)}`)} every night.` : 'Planner reminder is off.'}</div></div>
+        <div class="muted">${st.planOn ? `${Capacitor.isNativePlatform() ? 'A popup opens over any app' : 'Reminder'} at ${fmtTime(`${pad(pt.hour)}:${pad(pt.minute)}`)} every night.` : 'Planner reminder is off.'}</div></div>
       <div class="card"><h2>Notifications</h2>
         ${row('Task reminders', 'Alert at the time you set on a task', 'remindOn')}
         ${row('Overdue alerts', `Tasks pending 2+ days get ${NAG_SLOTS.length} alerts a day`, 'nagOn')}
@@ -443,7 +470,7 @@ const views = {
       <div class="card"><h2>Backup</h2>
         <div class="grid2"><button class="btn" data-act="export">Export</button><button class="btn alt" data-act="import">Import</button></div>
         <div class="muted" style="margin-top:10px">Your data lives only on this phone. Export a backup now and then.</div></div>
-      <div class="card"><h2>About</h2><div class="sec">Prysm v${APP_VERSION}. Everything stays on your phone. No account, no server.</div></div>`;
+      <div class="card about"><h2>About</h2><div class="about-head"><img class="about-logo" src="${logoUrl}" alt="Prysm logo" width="52" height="52"><div><div class="about-name">Prysm <span>v${APP_VERSION}</span></div><div class="sec">App developed by <b>Ayush</b></div></div></div><div class="muted" style="margin-top:14px">Everything stays on your phone. No account, no server.</div></div>`;
   },
 
 };
@@ -851,7 +878,7 @@ const actions = {
         const go = await ui.confirm('Allow "Display over other apps" for Prysm so the Add expense sheet can appear over PhonePe or GPay.', { title: 'Step 2 of 3', ok: 'Open settings' });
         if (go) await PaymentCapture.openOverlaySettings();
       } else if (!capture.battery) {
-        const go = await ui.confirm('Let Prysm run without battery limits so a payment popup is never missed.\n\nOn OnePlus, Realme, Xiaomi, Vivo and Oppo also allow Auto-start and Background activity for Prysm in the app settings.', { title: 'Step 3 of 3', ok: 'Open settings' });
+        const go = await ui.confirm('Let Prysm run without battery limits so popups are never missed.\n\nOn iQOO / Vivo also open App settings and allow Display pop-up windows, Display pop-up windows while running in the background, and Autostart. On Xiaomi, Oppo, Realme and OnePlus allow Auto-start and Background activity.', { title: 'Step 3 of 3', ok: 'Open settings' });
         if (go) await PaymentCapture.requestIgnoreBattery();
       } else {
         await ui.alert('Everything is switched on. Use Test popup in Settings to try it.', 'All set');
@@ -974,6 +1001,7 @@ const actions = {
   toggleSet: async (el) => {
     const st = db.get().settings, k = el.dataset.k;
     st[k] = !st[k];
+    if (k === 'keepAlive' && Capacitor.isNativePlatform()) { try { await PaymentCapture.setKeepAlive({ on: st[k] }); } catch (e) { /* older build */ } }
     if (st[k]) await ensureNotifPermission('Prysm needs notification permission to send these reminders.');
     await commit(); syncNotifications();
   },
@@ -985,6 +1013,16 @@ const actions = {
     await commit(); syncNotifications();
   },
   setLead: async (el) => { db.get().settings.planLead = Number(el.dataset.v); await commit(); syncNotifications(); },
+  capTestNow: async () => {
+    try { await PaymentCapture.testOverlay({ delayMs: 0 }); } catch (e) { toast(e.message || 'Could not show the popup'); }
+  },
+  capPlanTest: async () => {
+    try {
+      await PaymentCapture.testPlanOverlay({ delayMs: 5000 });
+      await ui.alert('The Plan tomorrow popup appears in 5 seconds. Go to your home screen or any app to see it on top. Tasks you add there show up in Tasks.', 'Test started');
+    } catch (e) { toast(e.message || 'Could not start the test'); }
+  },
+  capAppSettings: async () => { try { await PaymentCapture.openAppSettings(); } catch (e) { toast('Could not open app settings'); } },
   capTest: async () => {
     try {
       await PaymentCapture.testOverlay({ delayMs: 5000 });
@@ -1135,6 +1173,11 @@ App.addListener('resume', onResume);
 
 db.init().then(async () => {
   if (purgeDone()) await db.save();
+  if (Capacitor.isNativePlatform()) {
+    setNativePlan(true);
+    setSyncHook(pushPlan);
+    PaymentCapture.setKeepAlive({ on: db.get().settings.keepAlive !== false }).catch(() => {});
+  }
   await ensureAttStart();
   await initNotifications();
   render('up');

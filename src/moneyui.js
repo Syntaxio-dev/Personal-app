@@ -118,7 +118,7 @@ export function createMoney(d) {
       const status = b.paid ? '<span class="good">Paid</span>' : b.late ? `<span class="bad">${b.late} day${b.late === 1 ? '' : 's'} late · was due ${dayName(b.due)}</span>` : `Due ${dayName(b.due)}`;
       return `<div class="mrow ${b.paid ? 'paid' : ''}" style="--k:${KIND_COLOR[c.kind]}">
         <div class="grow" data-act="editBill" data-id="${c.id}"><div class="m-title">${esc(c.name)}</div>
-          <div class="m-sub">${KIND_LABEL[c.kind]}${c.person ? ' · ' + esc(c.person) : ''}${emis !== null ? ` · ${emis} EMI${emis === 1 ? '' : 's'} left` : ''}</div>
+          <div class="m-sub">${KIND_LABEL[c.kind]}${c.person && c.person !== c.name ? ' · ' + esc(c.person) : ''}${emis !== null ? ` · ${emis} EMI${emis === 1 ? '' : 's'} left` : ''}</div>
           <div class="m-sub">${status}</div></div>
         <div class="m-right"><b>${inr(c.amount)}</b>${b.paid ? `<button class="pill ghost" data-act="unpay" data-id="${c.id}">Undo</button>` : `<button class="pill" data-act="payBill" data-id="${c.id}">Pay</button>`}</div></div>`;
     }).join('');
@@ -373,7 +373,7 @@ export function createMoney(d) {
       const old = md.id ? S().commitments.find((c) => c.id === md.id) : null;
       const left = md.kind === 'loan' ? Number(($('b-left') || {}).value) : 0;
       const c = {
-        ...(old || { id: db.uid(), paid: {}, active: true, startMonth: cur }),
+        ...(old || { id: db.uid(), paid: {}, active: true, startMonth: md.day < Number(today().slice(8)) ? M.shiftMonth(cur, 1) : cur }),
         kind: md.kind, name, amount, dueDay: md.day,
         person: md.kind === 'family' ? md.bperson : '',
         category: md.kind === 'fixed' ? md.bcat : '',

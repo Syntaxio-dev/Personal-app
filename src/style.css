@@ -82,7 +82,7 @@ button.icon svg { width: 18px; height: 18px; stroke: currentColor; fill: none; s
 .st-H { color: var(--yellow) !important; background: rgba(251,191,36,0.08) !important; }
 .st-L { color: var(--indigo) !important; background: rgba(129,140,248,0.08) !important; }
 .st-O { color: var(--p2) !important; background: rgba(167,139,250,0.1) !important; }
-.legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 14px; font-size: 12px; color: var(--t2); }
+.legend { display: flex; gap: 6px 11px; flex-wrap: wrap; margin-top: 14px; font-size: 12px; color: var(--t2); }
 .legend span { display: flex; align-items: center; gap: 6px; }
 
 #modal { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 20; display: flex; align-items: flex-end; justify-content: center; }
@@ -455,3 +455,16 @@ textarea:focus { border-color: rgba(167,139,250,0.5); }
 .big3 button:active { transform: scale(0.96); }
 .big3 button.on { background: color-mix(in srgb, var(--k) 16%, transparent); border-color: var(--k); color: var(--k); }
 #rv-save[disabled] { opacity: 0.35; box-shadow: none; }
+
+/* ---------- never wider than the screen ---------- */
+/* page transitions slide content in from the side; clipping stops that from widening the page (phones then zoom out) */
+#view { overflow-x: clip; }
+html, body { max-width: 100%; }
+.about-name { font: 800 22px 'Manrope', sans-serif; letter-spacing: -0.5px; margin-bottom: 6px; }
+.about-name span { font: 600 13px 'DM Sans', sans-serif; color: var(--p2); letter-spacing: 0; margin-left: 6px; }
+.about .sec b { color: #fff; font-weight: 700; }
+
+/* ---------- about ---------- */
+.about-head { display: flex; align-items: center; gap: 16px; }
+.about-logo { width: 52px; height: 52px; border-radius: 14px; flex: none; box-shadow: 0 6px 20px rgba(124,58,237,0.35); }
+.about-head .about-name { margin-bottom: 4px; }

@@ -117,6 +117,68 @@ public class PaymentCapturePlugin extends Plugin {
         }
     }
 
+    // ---------- nightly "Plan tomorrow" popup ----------
+    @PluginMethod
+    public void setPlan(PluginCall call) {
+        try {
+            JSArray titles = call.getArray("titles", new JSArray());
+            PlanScheduler.configure(getContext(), Boolean.TRUE.equals(call.getBoolean("on", false)),
+                    call.getInt("hour", 22), call.getInt("minute", 30), call.getString("name", ""),
+                    call.getString("date", ""), titles);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("Could not schedule the plan popup", e);
+        }
+    }
+
+    /** Tasks typed into the plan popup since the last call, and whether the user tapped the plan notification. */
+    @PluginMethod
+    public void takePlanned(PluginCall call) {
+        try {
+            JSObject r = new JSObject();
+            r.put("items", new JSArray(PlanScheduler.takePending(getContext()).toString()));
+            boolean open = PlanScheduler.prefs(getContext()).getBoolean("openPlan", false);
+            if (open) PlanScheduler.prefs(getContext()).edit().putBoolean("openPlan", false).apply();
+            r.put("openPlan", open);
+            call.resolve(r);
+        } catch (Exception e) {
+            call.reject("Could not read planned tasks", e);
+        }
+    }
+
+    @PluginMethod
+    public void testPlanOverlay(PluginCall call) {
+        final Context app = getContext().getApplicationContext();
+        if (!Settings.canDrawOverlays(app)) {
+            call.reject("Display over other apps is off");
+            return;
+        }
+        int delay = call.getInt("delayMs", 0);
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            try {
+                if (!PlanOverlay.isShowing()) PlanOverlay.show(app);
+                PaymentListenerService.log(app, "prysm", null, "test plan popup shown");
+            } catch (Exception e) {
+                PaymentListenerService.log(app, "prysm", null, "test plan popup failed: " + e);
+            }
+        }, delay);
+        call.resolve();
+    }
+
+    // ---------- keep the process alive on aggressive phones ----------
+    @PluginMethod
+    public void setKeepAlive(PluginCall call) {
+        KeepAliveService.setWanted(getContext().getApplicationContext(), Boolean.TRUE.equals(call.getBoolean("on", true)));
+        call.resolve();
+    }
+
+    /** The app's own settings page; on iQOO/Vivo, Xiaomi and Oppo the extra pop-up permissions live here. */
+    @PluginMethod
+    public void openAppSettings(PluginCall call) {
+        launch(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, true);
+        call.resolve();
+    }
+
     @PluginMethod
     public void getLog(PluginCall call) {
         try {
