@@ -11,7 +11,7 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         // CI sets GITHUB_RUN_NUMBER so every build has a higher versionCode (Android only updates upward)
         versionCode = runNumber
-        versionName = "1.0.${runNumber}"
+        versionName = "1.1.${runNumber}"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

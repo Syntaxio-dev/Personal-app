@@ -1,5 +1,6 @@
 {
   "appId": "com.personal.app",
-  "appName": "Personal App",
+  "appName": "Prysm",
+  "backgroundColor": "#000000",
   "webDir": "dist"
 }
