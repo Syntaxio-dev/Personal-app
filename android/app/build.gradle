@@ -1,5 +1,7 @@
 apply plugin: 'com.android.application'
 
+def runNumber = (System.getenv("GITHUB_RUN_NUMBER") ?: "1") as int
+
 android {
     namespace = "com.personal.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -8,8 +10,8 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         // CI sets GITHUB_RUN_NUMBER so every build has a higher versionCode (Android only updates upward)
-        versionCode (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInteger()
-        versionName "1.0.${System.getenv("GITHUB_RUN_NUMBER") ?: "0"}"
+        versionCode = runNumber
+        versionName = "1.0.${runNumber}"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
