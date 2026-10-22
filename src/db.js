@@ -11,6 +11,7 @@ const empty = () => ({
   budgets: {},
   attendance: {},
   todos: [],
+  inbox: [],
 });
 
 const normalize = (s) => ({ ...empty(), ...(s || {}) });
