@@ -288,8 +288,7 @@ function markDayForm(date) {
   const v = db.get().attendance[date] || {};
   openModal(`<h2>${date}</h2>
     <div class="grid2">${Object.entries(STATUS).map(([k, l]) => `<button class="btn ${v.s === k ? 'on' : 'alt'}" data-act="setDay" data-date="${date}" data-s="${k}">${l}</button>`).join('')}</div>
-    <div class="row" style="margin-top:14px"><div style="flex:1"><span class="label">In</span><input id="f-in" type="time" value="${v.in || ''}"></div><div style="flex:1"><span class="label">Out</span><input id="f-out" type="time" value="${v.out || ''}"></div></div>
-    <div class="muted" style="margin-bottom:10px">In/out time is optional. Tap a status to save.</div>
+    <div class="muted" style="margin:12px 0">Tap a status to save.</div>
     ${v.s ? `<button class="btn danger" data-act="clearDay" data-date="${date}">Clear</button>` : ''}`);
 }
 
@@ -355,7 +354,7 @@ const actions = {
   markDay: (el) => markDayForm(el.dataset.date),
   setDay: async (el) => {
     const date = el.dataset.date;
-    db.get().attendance[date] = { s: el.dataset.s, in: $('f-in').value, out: $('f-out').value };
+    db.get().attendance[date] = { s: el.dataset.s };
     closeModal(); await commit();
   },
   clearDay: async (el) => { delete db.get().attendance[el.dataset.date]; closeModal(); await commit(); },
