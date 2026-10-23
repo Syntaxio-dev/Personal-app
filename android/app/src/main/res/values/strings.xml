@@ -4,6 +4,7 @@
     <string name="title_activity_main">Prysm</string>
     <string name="package_name">com.personal.app</string>
     <string name="custom_url_scheme">com.personal.app</string>
+    <string name="accessibility_description">Enforces the limits you set for yourself. Prysm notices which app is in front, reads the address bar of web browsers, and checks the few system settings screens that could switch your limits off. It never reads other apps or what you type, stores nothing it sees, and nothing leaves your phone.</string>
     <string name="widget_quick_desc">Add an expense, income or task, or mark attendance, in one tap</string>
     <string name="widget_today_desc">Tasks for today, attendance and your wallet</string>
     <string name="widget_attendance_desc">Attendance percentage with a graph of the last 14 days</string>

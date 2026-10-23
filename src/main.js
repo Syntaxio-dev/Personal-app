@@ -20,6 +20,7 @@ import * as money from './money.js';
 import { createMoney } from './moneyui.js';
 import * as G from './goals.js';
 import { createGoals } from './goalsui.js';
+import { createScreen } from './screenui.js';
 import { pad, dateStr, today, addDays, daysBetween, dayName, dayLabel, fmtTime } from './dates.js';
 import { syncNotifications, initNotifications, planTime, exactAlarmsAllowed, openExactAlarmSettings, NAG_SLOTS, setNativePlan, setSyncHook } from './notify.js';
 
@@ -52,6 +53,7 @@ const ICON = {
   gear: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
   clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  lock: '<rect x="5" y="11" width="14" height="9" rx="2.5"/><path d="M8 11V8a4 4 0 018 0v3"/>',
   up: '<path d="M6 14l6-6 6 6"/>',
   down: '<path d="M6 10l6 6 6-6"/>',
 };
@@ -67,6 +69,7 @@ const DASH_WIDGETS = {
   attendance: { name: 'Attendance', desc: 'Mark today and see the month' },
   bills: { name: 'Bills due', desc: 'Appears only when something is due soon' },
   bucket: { name: 'Bucket list', desc: 'Your dream of the month and how many are done' },
+  screen: { name: 'Screen time', desc: 'Phone time today and your app limits' },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -298,6 +301,7 @@ async function pushPlan() {
   await PaymentCapture.setPlan({ on: !!st.planOn, hour, minute, name: st.name || '', date, titles });
   await PaymentCapture.setConfirms({ items: moneyUi.confirmItems() });
   await PaymentCapture.setWidgetData({ json: JSON.stringify(widgetData()) });
+  await screenUi.pushConfig();
 }
 
 // the numbers the home screen widgets show (they cannot run the app, so a snapshot is saved on every change)
@@ -368,6 +372,7 @@ function dashWidget(id) {
       ${soon.map((b) => `<div class="drow"><div class="grow"><div class="t-title">${esc(b.c.name)}</div><div class="t-meta">${b.late ? `<span class="ptag late">${b.late} day${b.late === 1 ? '' : 's'} late</span>` : `Due ${dayName(b.due)}`}</div></div><b>${inr(b.amount !== undefined ? b.amount : b.c.amount)}</b><button class="pill" data-act="payBill" data-id="${b.c.id}" data-inst="${b.key || ''}">Pay</button></div>`).join('')}</div>`;
   }
   if (id === 'goals' || id === 'bucket') return goalsUi.widget(id);
+  if (id === 'screen') return screenUi.widget();
   return '';
 }
 
@@ -398,6 +403,12 @@ const goalsUi = createGoals({
   syncNotifications: () => syncNotifications(), openTaskForm: (o) => addTodoForm(o),
 });
 
+// window.__screenPlugin is a test hook: a fake phone for the browser tests (never set in the app)
+const screenUi = createScreen({
+  ui, openModal, closeModal, commit, render: (a) => render(a), esc, svg, plugin: window.__screenPlugin || PaymentCapture, isNative: !!window.__screenPlugin || Capacitor.isNativePlatform(),
+  pickTime: (o) => pickTime(o), fmtTime, toast, attKind: (day) => att.dayKind(att.attCtx(db.get()), day),
+});
+
 // ---------- views ----------
 const views = {
   home() {
@@ -411,6 +422,8 @@ const views = {
   money() { return moneyUi.view(); },
 
   goals() { return goalsUi.view(); },
+
+  screen() { return screenUi.view(); },
 
   att() {
     const S = db.get();
@@ -489,6 +502,8 @@ const views = {
       <div class="card"><h2>Profile</h2><span class="label">Your name</span><input id="s-name" value="${esc(st.name)}" placeholder="What should Prysm call you?" maxlength="30" autocomplete="off" style="margin-bottom:0"></div>
       <div class="card"><h2>Dashboard</h2>
         <div class="set-row"><div class="grow"><b>Customize</b><span>Choose what shows on your dashboard and in which order</span></div><button class="capsule set" style="margin:0" data-act="dashEdit"><span>Edit</span></button></div></div>
+      <div class="card"><h2>Screen time</h2>
+        <div class="set-row"><div class="grow"><b>Usage and limits</b><span>See your phone time and stop apps once your daily limit is used up</span></div><button class="capsule set" style="margin:0" data-act="goScreen"><span>Open</span></button></div></div>
       ${Capacitor.isNativePlatform() ? `<div class="card"><h2>Home screen widgets</h2><div class="sec" style="line-height:1.6">Long-press an empty spot on your home screen, tap <b>Widgets</b>, then pick <b>Prysm</b>:<br>• <b>Quick add</b>: expense, income, task, attendance<br>• <b>Today</b>: tasks left and your wallet<br>• <b>Attendance</b>: percentage and a 14-day graph</div></div>` : ''}
       <div class="card"><h2>Night planner</h2>
         ${row('Plan tomorrow', 'A nightly reminder to line up the next day', 'planOn')}
@@ -898,7 +913,7 @@ function doImport() {
   inp.onchange = async () => {
     const f = inp.files[0];
     if (!f || !(await ui.confirm('This will replace all current data with the backup.', { title: 'Restore backup', ok: 'Replace', danger: true }))) return;
-    try { await db.importJson(await f.text()); await ensureAttStart(); render(); toast('Data restored'); } catch (e) { toast(e.message); }
+    try { await db.importJson(await f.text()); await ensureAttStart(); await screenUi.pull(); render(); toast('Data restored'); } catch (e) { toast(e.message); }
   };
   inp.click();
 }
@@ -1054,8 +1069,14 @@ const actions = {
   openSettings: () => { tab = 'settings'; window.scrollTo(0, 0); render('next'); },
   toggleSet: async (el) => {
     const st = db.get().settings, k = el.dataset.k;
+    // the keep-alive service carries the watchdog of the locked limits, so it cannot be switched off while one is locked
+    if (k === 'keepAlive' && st[k] && screenUi.locked()) { await ui.alert('Your limits are locked, so Prysm has to keep running. You can switch this off when the lock ends.', 'Locked'); return; }
     st[k] = !st[k];
-    if (k === 'keepAlive' && Capacitor.isNativePlatform()) { try { await PaymentCapture.setKeepAlive({ on: st[k] }); } catch (e) { /* older build */ } }
+    if (k === 'keepAlive' && Capacitor.isNativePlatform()) {
+      try { await PaymentCapture.setKeepAlive({ on: st[k] }); } catch (e) {
+        if (!st[k]) { st[k] = true; await ui.alert('Your limits are locked, so Prysm has to keep running. You can switch this off when the lock ends.', 'Locked'); render(); return; }
+      }
+    }
     if (st[k]) await ensureNotifPermission('Prysm needs notification permission to send these reminders.');
     await commit(); syncNotifications();
   },
@@ -1094,6 +1115,8 @@ const actions = {
 };
 Object.assign(actions, moneyUi.actions);
 Object.assign(actions, goalsUi.actions);
+Object.assign(actions, screenUi.actions);
+actions.goScreen = () => { tab = 'screen'; window.scrollTo(0, 0); render('next'); screenUi.sync(true).then((changed) => { if (changed && tab === 'screen' && $('modal').hidden) render(); }); };
 
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.dd')) document.querySelectorAll('.menu').forEach((m) => { m.hidden = true; });
@@ -1151,9 +1174,10 @@ document.addEventListener('touchend', (e) => {
 // ---------- shell ----------
 // anim: 'up' | 'next' | 'prev' | 'fade' | undefined (no animation, e.g. after ticking a task)
 function render(anim) {
-  const title = tab === 'settings' ? 'Settings' : TABS.find((t) => t[0] === tab)[1];
-  $('top').innerHTML = `<div class="row">${tab === 'settings' ? `<button class="icon back" data-act="goto" data-tab="home" aria-label="Back">${svg('prev')}</button>` : ''}<h1>${title}</h1></div>
-    <div class="row"><span class="date">${new Date().toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}</span>${tab === 'settings' ? '' : `<button class="icon gear" data-act="openSettings" aria-label="Settings">${svg('gear')}</button>`}</div>`;
+  const subPage = tab === 'settings' || tab === 'screen';
+  const title = tab === 'settings' ? 'Settings' : tab === 'screen' ? 'Screen time' : TABS.find((t) => t[0] === tab)[1];
+  $('top').innerHTML = `<div class="row">${subPage ? `<button class="icon back" data-act="goto" data-tab="home" aria-label="Back">${svg('prev')}</button>` : ''}<h1>${title}</h1></div>
+    <div class="row"><span class="date">${new Date().toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}</span>${subPage ? '' : `<button class="icon gear" data-act="openSettings" aria-label="Settings">${svg('gear')}</button>`}</div>`;
   const view = $('view');
   view.className = '';
   view.dataset.tab = tab;
@@ -1169,6 +1193,7 @@ function render(anim) {
   if (tab === 'todo' && todoFilter === 'report') drawTaskReport();
   if (tab === 'att') drawAttCharts();
   if (tab === 'goals' && goalsUi.getTab() === 'journal' && $('j-chart')) drawJournalChart();
+  if (tab === 'screen') { screenUi.draw(Chart, charts, { gradient }); screenUi.afterRender(); }
   if (anim) countUp();
 }
 
@@ -1219,6 +1244,7 @@ async function ensureAttStart() {
 
 async function onResume() {
   if (purgeDone()) await db.save();
+  await screenUi.sync(true);
   await syncPayments();
   syncNotifications();
   goalsUi.checkDue({ force: true });
@@ -1243,5 +1269,11 @@ db.init().then(async () => {
   goalsUi.checkDue({ force: true });
   // a goal's period can end while the app is open; check once a minute, but never interrupt a form
   setInterval(() => { if (!document.hidden) goalsUi.checkDue(); }, 60000);
+  // screen time: first numbers right after start, then a refresh every minute while the page or dashboard is showing
+  screenUi.sync(true).then((changed) => { if (changed && (tab === 'home' || tab === 'screen') && $('modal').hidden) render(); });
+  setInterval(() => {
+    if (document.hidden || (tab !== 'home' && tab !== 'screen')) return;
+    screenUi.sync().then((changed) => { if (changed && $('modal').hidden && $('dialog').hidden) render(); });
+  }, 60000);
   setTimeout(firstRun, 1200);
 }).catch((e) => { document.body.textContent = 'Database error: ' + e.message; });

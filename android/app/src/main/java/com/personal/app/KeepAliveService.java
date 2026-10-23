@@ -9,7 +9,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 
 import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
@@ -23,11 +25,26 @@ public class KeepAliveService extends Service {
     private static final String CHANNEL = "prysm_running";
     private static final int ID = 4200;
 
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Runnable watch = new Runnable() {
+        @Override
+        public void run() {
+            try {
+                ScreenTime.watchdog(KeepAliveService.this);
+            } catch (Exception ignored) {
+                // the watchdog must never take the service down
+            }
+            handler.postDelayed(this, 60000);
+        }
+    };
+
     static boolean wanted(Context c) {
         return PlanScheduler.prefs(c).getBoolean("keepAlive", false);
     }
 
     static void setWanted(Context c, boolean on) {
+        // the service carries the watchdog of the locked limits, so it stays on while one is locked
+        if (!on && ScreenTime.guardActive(c)) on = true;
         PlanScheduler.prefs(c).edit().putBoolean("keepAlive", on).apply();
         if (on) start(c); else stop(c);
     }
@@ -77,6 +94,14 @@ public class KeepAliveService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
+        handler.removeCallbacks(watch);
+        handler.postDelayed(watch, 5000);
         return START_STICKY;
+    }
+
+    @Override
+    public void onDestroy() {
+        handler.removeCallbacks(watch);
+        super.onDestroy();
     }
 }

@@ -473,3 +473,48 @@ html, body { max-width: 100%; }
 .inst-row { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) auto; gap: 8px; align-items: start; }
 .inst-row input { margin-bottom: 8px; min-width: 0; }
 .inst-row .icon { margin-top: 4px; }
+
+/* ---------- screen time ---------- */
+.app-ic { width: 38px; height: 38px; border-radius: 11px; flex: none; display: grid; place-items: center; overflow: hidden; background: var(--tint); color: var(--p2); font: 800 15px 'Manrope', sans-serif; }
+.app-ic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sc-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; }
+.sc-row .grow, .lim-top .grow { flex: 1; min-width: 0; }
+.sc-row b { font: 800 14px 'Manrope', sans-serif; white-space: nowrap; }
+.sc-name { font: 700 15px 'Manrope', sans-serif; overflow-wrap: anywhere; }
+.sc-name .ptag { margin: 0 0 0 8px; font: 500 11px 'DM Sans', sans-serif; color: var(--p2); }
+.sc-row .bar { margin-top: 7px; }
+.chart-box.sc-chart { height: 200px; }
+.lim-row { padding: 14px 0; }
+.lim-row + .lim-row { border-top: 1px solid var(--glass-line); }
+.lim-top { display: flex; align-items: center; gap: 12px; }
+.lim-top .muted { margin-top: 3px; line-height: 1.4; }
+.lim-row .bar { margin-top: 12px; }
+.lim-use { margin-top: 7px; }
+.lim-step { margin: 2px 0 6px; padding: 6px 4px; border-radius: 14px; background: var(--glass); border: 1px solid var(--glass-line); }
+.lim-step b { font: 800 18px 'Manrope', sans-serif; }
+.app-list { max-height: 46vh; overflow: auto; margin-top: 4px; }
+.app-pick { display: flex; align-items: center; gap: 12px; width: 100%; padding: 9px 4px; border: 0; background: none; color: #fff; text-align: left; font: 600 15px 'DM Sans', sans-serif; }
+.app-pick .tick { width: 22px; height: 22px; border-radius: 7px; border: 1.5px solid rgba(255,255,255,0.25); flex: none; position: relative; }
+.app-pick.on .tick { background: var(--purple); border-color: transparent; }
+.app-pick.on .tick::after { content: '✓'; position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-size: 13px; font-style: normal; }
+.ins-row { display: flex; gap: 14px; align-items: flex-start; padding: 12px 0; }
+.ins-row + .ins-row { border-top: 1px solid var(--glass-line); }
+.ins-row i { width: 8px; height: 8px; border-radius: 50%; flex: none; margin-top: 7px; }
+.ins-row b { display: block; font: 700 15px 'Manrope', sans-serif; }
+.ins-row span { display: block; margin-top: 3px; font-size: 13px; line-height: 1.5; color: var(--t2); }
+.sw-num { font: 800 34px 'Manrope', sans-serif; letter-spacing: -1px; }
+.sw-apps { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.sw-apps span { padding: 6px 12px; border-radius: 20px; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-line); font-size: 12px; color: var(--t2); }
+.sw-apps b { color: #fff; margin-left: 4px; }
+.sw-lim { margin-top: 14px; font-size: 13px; }
+
+/* ---------- locked promises (screen time) ---------- */
+.lock-badge { flex: none; width: 34px; height: 34px; border-radius: 11px; display: grid; place-items: center; background: var(--tint); color: var(--p2); }
+.lock-badge svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.lim-lock { margin-top: 8px; line-height: 1.4; }
+.banner > svg { width: 20px; height: 20px; flex: none; margin-top: 1px; stroke: var(--yellow); fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.sl-time { font: 800 22px 'Manrope', sans-serif; letter-spacing: -0.5px; margin: 12px 0 4px; }
+.sl-msg { margin-top: 12px; padding: 12px 14px; border-radius: 12px; background: rgba(124,58,237,0.1); border: 1px solid rgba(124,58,237,0.25); font: 600 14px 'DM Sans', sans-serif; color: var(--p3); }
+.chips button[disabled], button.icon[disabled], .switch[disabled] { opacity: 0.3; pointer-events: none; }
+.app-pick .grow small { display: block; font-size: 11px; font-weight: 500; color: var(--t3); margin-top: 1px; }
+.app-pick.held .tick { background: rgba(124,58,237,0.5); }

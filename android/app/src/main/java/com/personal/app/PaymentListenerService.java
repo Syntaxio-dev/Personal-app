@@ -140,6 +140,12 @@ public class PaymentListenerService extends NotificationListenerService {
             if (sbn == null) return;
             final String pkg = sbn.getPackageName();
             final boolean sms = SMS_APPS.contains(pkg);
+            // an app that is blocked right now must not be usable through its notifications either (inline replies);
+            // payment and bank messages are never touched
+            if (!sms && !UPI_APPS.contains(pkg) && ScreenTime.hideNotificationsOf(this, pkg)) {
+                cancelNotification(sbn.getKey());
+                return;
+            }
             if (!sms && !UPI_APPS.contains(pkg)) return;
             Notification n = sbn.getNotification();
             if (n == null || (n.flags & Notification.FLAG_GROUP_SUMMARY) != 0) return;
