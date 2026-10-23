@@ -16,8 +16,9 @@ public class MainActivity extends BridgeActivity {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
-        if (intent != null && "plan".equals(intent.getStringExtra("prysm_open"))) {
-            PlanScheduler.prefs(this).edit().putBoolean("openPlan", true).apply();
+        String open = intent == null ? null : intent.getStringExtra("prysm_open");
+        if (open != null && !open.isEmpty()) {
+            PlanScheduler.prefs(this).edit().putString("launch", open).apply();
             intent.removeExtra("prysm_open");
         }
     }

@@ -14,6 +14,7 @@ public class BootReceiver extends BroadcastReceiver {
                 && !"android.intent.action.QUICKBOOT_POWERON".equals(action)) return;
         Context app = context.getApplicationContext();
         PlanScheduler.schedule(app);
+        ConfirmScheduler.schedule(app);
         if (KeepAliveService.wanted(app)) KeepAliveService.start(app);
     }
 }

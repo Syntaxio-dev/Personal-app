@@ -37,6 +37,10 @@ final class OverlayHost {
         return VIEWS.containsKey(tag);
     }
 
+    static boolean anyShowing() {
+        return !VIEWS.isEmpty();
+    }
+
     static Context uiContext(Context ctx) {
         Context base = ctx.getApplicationContext();
         if (Build.VERSION.SDK_INT >= 30) {

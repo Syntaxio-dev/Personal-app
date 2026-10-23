@@ -1,11 +1,12 @@
 import * as db from './db.js';
-import { today, dayName } from './dates.js';
+import { today, dayName, addDays } from './dates.js';
 import * as M from './money.js';
 
 const SOURCES = [['salary', 'Salary'], ['zomato', 'Zomato'], ['other', 'Other']];
-const BILL_KINDS = [['loan', 'Loan EMI'], ['family', 'Family'], ['fixed', 'Fixed bill'], ['sip', 'SIP']];
-const KIND_LABEL = Object.fromEntries(BILL_KINDS);
-const KIND_COLOR = { loan: '#f87171', family: '#a78bfa', fixed: '#fbbf24', sip: '#4ade80' };
+// two kinds of bills: repeating every month (installments, family, fixed) and one-time debts with a fixed date
+const BILL_KINDS = [['loan', 'Installment (EMI)'], ['owed', 'I owe someone'], ['family', 'Family'], ['fixed', 'Fixed bill']];
+const KIND_LABEL = { ...Object.fromEntries(BILL_KINDS), owed: 'I owe', loan: 'Loan EMI', sip: 'SIP' };
+const KIND_COLOR = { loan: '#f87171', owed: '#fb923c', family: '#a78bfa', fixed: '#fbbf24', sip: '#4ade80' };
 const FIXED_CATS = ['Groceries', 'Bills', 'Rent', 'Other'];
 const INV_TYPES = ['Digital gold', 'Mutual fund', 'FD / RD', 'Stocks', 'Other'];
 
@@ -20,6 +21,8 @@ export function createMoney(d) {
   let tab = 'overview';
   let lentFilter = 'active';
   let md = {}; // draft of whichever form is open
+  let billsMode = 'main'; // 'main' | 'all' (the full payment record)
+  let allFilter = 'payments'; // 'payments' | 'emis'
 
   const refresh = async () => { await commit(); syncNotifications(); };
   const monthName = (m) => new Date(`${m}-01T00:00`).toLocaleDateString('en-IN', { month: 'long' });
@@ -51,7 +54,7 @@ export function createMoney(d) {
   // ---------- views ----------
   function view() {
     const s = S();
-    const unpaid = M.billsFor(s, today().slice(0, 7)).filter((b) => !b.paid).length;
+    const unpaid = M.billsFor(s, today().slice(0, 7)).filter((b) => !b.paid).length + M.owedFor(s).filter((b) => !b.paid).length;
     const tabs = `<div class="chips subtabs scroll">${[['overview', 'Overview'], ['bills', 'Bills'], ['invest', 'Invest'], ['lent', 'Lent'], ['report', 'Report']].map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-act="mTab" data-v="${k}">${l}${k === 'bills' && unpaid ? `<i>${unpaid}</i>` : ''}</button>`).join('')}</div>`;
     const body = tab === 'bills' ? billsView() : tab === 'invest' ? investView() : tab === 'lent' ? lentView() : tab === 'report' ? reportView() : overview();
     return tabs + body;
@@ -77,7 +80,7 @@ export function createMoney(d) {
     const people = Object.entries(m.byPerson).sort((a, b) => b[1] - a[1]);
     const rows = [...m.tx].sort((a, b) => b.date.localeCompare(a.date)).map((t) => `
       <div class="item tap" data-act="editTx" data-id="${t.id}">${dot(t.type === 'income' ? '#4ade80' : '#f87171')}
-        <div class="grow"><div>${esc(t.category)}${t.person ? ` <span class="ptag">${esc(t.person)}</span>` : ''}${t.note ? ' · ' + esc(t.note) : ''}</div><div class="muted">${dayName(t.date)}</div></div>
+        <div class="grow"><div>${esc(t.category)}${t.person ? ` <span class="ptag">${esc(t.person)}</span>` : ''}${t.mode === 'cash' ? ' <span class="ptag">Cash</span>' : ''}${t.note ? ' · ' + esc(t.note) : ''}</div><div class="muted">${dayName(t.date)}</div></div>
         <b class="${t.type === 'income' ? 'good' : 'bad'}">${t.type === 'income' ? '+' : '-'}${inr(t.amount)}</b>
         <button class="icon" data-act="delTx" data-id="${t.id}" aria-label="Delete">${svg('trash')}</button></div>`).join('') || '<div class="muted">No entries this month.</div>';
 
@@ -101,32 +104,125 @@ export function createMoney(d) {
     const saved = m.income - m.expense;
     return `${monthPicker()}
       <div class="card"><div class="grid2"><div><div class="label">Earned</div><div class="val good" style="margin-top:6px">${inr(m.income)}</div></div><div><div class="label">Spent</div><div class="val bad" style="margin-top:6px">${inr(m.expense)}</div></div></div>
-        <div class="muted" style="margin-top:14px">${saved >= 0 ? 'Saved' : 'Overspent'} ${inr(Math.abs(saved))} in ${monthName(ym)}</div></div>
+        <div class="muted" style="margin-top:14px">${saved >= 0 ? 'Saved' : 'Overspent'} ${inr(Math.abs(saved))} in ${monthName(ym)}</div>
+        <div class="muted" style="margin-top:6px">Online ${inr(m.online)} · Cash ${inr(m.cash)}</div></div>
       <div class="card chart-card"><h2>Spending by category</h2><div class="chart-box tall"><canvas id="c1"></canvas></div></div>
       <div class="card chart-card"><h2>Income vs expenses · 6 months</h2><div class="chart-box"><canvas id="c2"></canvas></div></div>`;
   }
 
+  const emiLine = (c, m, paid) => {
+    const e = M.emiStats(c);
+    if (c.kind !== 'loan' || !e.total) {
+      const left = M.emisLeft(c, m, paid);
+      return left !== null ? ` · ${left} EMI${left === 1 ? '' : 's'} left` : '';
+    }
+    return ` · ${e.paid} of ${e.total} paid · ${e.left} left`;
+  };
+
   function billsView() {
+    if (billsMode === 'all') return allPaymentsView();
     const s = S(), t = today(), m = t.slice(0, 7);
     const list = M.billsFor(s, m, t);
     const total = sum(list, (b) => Number(b.c.amount) || 0);
     const paidAmt = sum(list.filter((b) => b.paid), (b) => Number(b.c.amount) || 0);
     const left = list.filter((b) => !b.paid).length;
-    const rows = list.map((b) => {
+    const rows = list.filter((b) => M.isRecent(b, t)).map((b) => {
       const c = b.c;
-      const emis = M.emisLeft(c, m, b.paid);
       const status = b.paid ? '<span class="good">Paid</span>' : b.late ? `<span class="bad">${b.late} day${b.late === 1 ? '' : 's'} late · was due ${dayName(b.due)}</span>` : `Due ${dayName(b.due)}`;
       return `<div class="mrow ${b.paid ? 'paid' : ''}" style="--k:${KIND_COLOR[c.kind]}">
         <div class="grow" data-act="editBill" data-id="${c.id}"><div class="m-title">${esc(c.name)}</div>
-          <div class="m-sub">${KIND_LABEL[c.kind]}${c.person && c.person !== c.name ? ' · ' + esc(c.person) : ''}${emis !== null ? ` · ${emis} EMI${emis === 1 ? '' : 's'} left` : ''}</div>
+          <div class="m-sub">${KIND_LABEL[c.kind]}${c.person && c.person !== c.name ? ' · ' + esc(c.person) : ''}${emiLine(c, m, b.paid)}</div>
           <div class="m-sub">${status}</div></div>
         <div class="m-right"><b>${inr(c.amount)}</b>${b.paid ? `<button class="pill ghost" data-act="unpay" data-id="${c.id}">Undo</button>` : `<button class="pill" data-act="payBill" data-id="${c.id}">Pay</button>`}</div></div>`;
     }).join('');
+    const owed = M.owedFor(s, t).filter((b) => !b.paid || M.isRecent(b, t));
+    const owedRows = owed.map((b) => {
+      const c = b.c;
+      const status = b.paid ? '<span class="good">Paid</span>' : b.late ? `<span class="bad">${b.late} day${b.late === 1 ? '' : 's'} late · was due ${dayName(b.due)}</span>` : `Pay on ${dayName(b.due)}`;
+      return `<div class="mrow ${b.paid ? 'paid' : ''}" style="--k:${KIND_COLOR.owed}">
+        <div class="grow" data-act="editBill" data-id="${c.id}"><div class="m-title">${esc(c.name)}</div>
+          <div class="m-sub">${c.person ? 'Give ' + esc(c.person) : 'One-time payment'}</div><div class="m-sub">${status}</div></div>
+        <div class="m-right"><b>${inr(c.amount)}</b>${b.paid ? `<button class="pill ghost" data-act="unpay" data-id="${c.id}">Undo</button>` : `<button class="pill" data-act="payBill" data-id="${c.id}">Paid</button>`}</div></div>`;
+    }).join('');
+    // an installment plan that was finished in the last 7 days (and is no longer in this month's list)
+    const finished = M.completedEmis(s).filter((x) => x.doneOn && x.doneOn >= addDays(t, -7) && !list.some((b) => b.c.id === x.c.id));
+    const finishedRows = finished.map(({ c, stats }) => `<div class="mrow paid" style="--k:#4ade80"><div class="grow"><div class="m-title">${esc(c.name)}</div>
+      <div class="m-sub">All ${stats.total} installments paid</div><div class="m-sub"><span class="good">Completed</span></div></div><div class="m-right"><b>${inr(c.amount * stats.total)}</b></div></div>`).join('');
+    const history = M.paymentHistory(s).length + M.completedEmis(s).length;
     return `<button class="btn" data-act="addBill">+ Add bill</button>
       <div class="card"><div class="row between"><h2 style="margin:0">${monthName(m)} bills</h2><b>${inr(paidAmt)} / ${inr(total)}</b></div>
         <div class="bar"><div style="width:${total ? (paidAmt / total) * 100 : 0}%"></div></div>
-        <div class="muted" style="margin-top:8px">${list.length ? `${left} to pay · ${inr(total - paidAmt)} left this month` : 'Loans, groceries, money for family, SIPs: add anything that repeats every month.'}</div></div>
-      ${rows}`;
+        <div class="muted" style="margin-top:8px">${list.length ? `${left} to pay · ${inr(total - paidAmt)} left this month` : 'Installments, groceries and money for family repeat every month. Add them here.'}</div></div>
+      ${rows}
+      ${owedRows ? `<div class="day-head"><div><b>Pay back</b><span>One time, on a fixed date</span></div><i>${owed.filter((b) => !b.paid).length}</i></div>${owedRows}` : ''}
+      ${finishedRows ? `<div class="day-head"><div><b>Just completed</b><span>Moves to All payments after a week</span></div><i>${finished.length}</i></div>${finishedRows}` : ''}
+      ${history ? `<button class="btn alt" data-act="billsAll">View all payments</button>` : ''}`;
+  }
+
+  // the permanent record: every payment ever made, and every finished installment plan
+  function allPaymentsView() {
+    const s = S();
+    const hist = M.paymentHistory(s);
+    const done = M.completedEmis(s);
+    const chip = (k, l, n) => `<button class="${allFilter === k ? 'on' : ''}" data-act="allFilter" data-v="${k}">${l}<i>${n}</i></button>`;
+    let body;
+    if (allFilter === 'emis') {
+      body = done.length ? done.map(({ c, stats, doneOn }) => `<div class="mrow" style="--k:#4ade80"><div class="grow"><div class="m-title">${esc(c.name)}</div>
+        <div class="m-sub">${stats.total} installments of ${inr(c.amount)}${c.paidBefore ? ` · ${c.paidBefore} paid before Prysm` : ''}</div>
+        <div class="m-sub"><span class="good">Completed${doneOn ? ' ' + dayName(doneOn) : ''}</span></div></div><div class="m-right"><b>${inr(c.amount * stats.total)}</b></div></div>`).join('')
+        : '<div class="empty"><b>No completed installment plans yet</b><span>When you pay the last installment of an EMI it is kept here.</span></div>';
+    } else if (!hist.length) {
+      body = '<div class="empty"><b>No payments yet</b><span>Every bill, debt and SIP you mark as paid is kept here for good.</span></div>';
+    } else {
+      const byMonth = {};
+      hist.forEach((h) => { (byMonth[h.date.slice(0, 7)] = byMonth[h.date.slice(0, 7)] || []).push(h); });
+      body = Object.keys(byMonth).sort().reverse().map((m) => `<section class="day"><div class="day-head"><div><b>${monthName(m)} ${m.slice(0, 4)}</b><span>${byMonth[m].length} payment${byMonth[m].length === 1 ? '' : 's'}</span></div><i>${inr(sum(byMonth[m], (h) => h.amount))}</i></div>
+        ${byMonth[m].map((h) => `<div class="mrow" style="--k:${KIND_COLOR[h.kind] || '#a78bfa'}"><div class="grow"><div class="m-title">${esc(h.name)}</div>
+          <div class="m-sub">${KIND_LABEL[h.kind] || 'Bill'}${h.person && h.person !== h.name ? ' · ' + esc(h.person) : ''} · ${dayName(h.date)}</div></div><div class="m-right"><b>${inr(h.amount)}</b></div></div>`).join('')}</section>`).join('');
+    }
+    return `<button class="link" style="text-align:left" data-act="billsBack">← Back to bills</button>
+      <div class="card"><div class="label">All payments</div><div class="num" style="margin:8px 0">${inr(sum(hist, (h) => h.amount))}</div><div class="muted">${hist.length} payment${hist.length === 1 ? '' : 's'} · ${done.length} completed installment plan${done.length === 1 ? '' : 's'}</div></div>
+      <div class="chips">${chip('payments', 'Payments', hist.length)}${chip('emis', 'Completed EMIs', done.length)}</div>${body}`;
+  }
+
+  const hasReturn = (i) => i.returnPct !== null && i.returnPct !== undefined && i.returnPct !== '';
+  const returnText = (i) => (hasReturn(i) ? ` · <b>Return ${i.returnPct > 0 ? '+' : ''}${i.returnPct}%</b>` : '');
+  const monthLabel = (m) => new Date(`${m}-01T00:00`).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+  const sipLine = (i) => (i.sip && i.sip.on !== false ? `<div class="muted" style="margin-top:6px">SIP ${inr(i.sip.amount)} on the ${ordinal(i.sip.day)} · since ${monthLabel(i.sip.start)}</div>` : i.sip ? '<div class="muted" style="margin-top:6px">SIP stopped</div>' : '');
+
+  // the SIP fields shared by "Add investment" and "Set up SIP"
+  function sipFields(inv) {
+    const sip = inv && inv.sip;
+    return `<span class="label">Monthly SIP</span>${chipRow('sipOn', [['no', 'No SIP'], ['yes', 'Monthly SIP']], md.sipOn)}
+      <div id="sip-box" ${md.sipOn === 'yes' ? '' : 'hidden'}>
+        <input id="s-amt" type="number" inputmode="decimal" placeholder="Amount per month ₹" value="${sip ? sip.amount : ''}">
+        <span class="label">First installment date (the same day repeats every month)</span>
+        <input id="s-date" type="date" value="${sip ? `${sip.start}-${String(sip.day).padStart(2, '0')}` : ''}">
+        <span class="label">Months that already passed</span>${chipRow('sipBack', [['yes', 'Count them as invested'], ['no', 'Ignore them']], md.sipBack)}
+        <div class="muted" style="margin:-2px 0 14px">On every SIP day Prysm asks "did you pay?" and only then adds it.</div>
+      </div>`;
+  }
+
+  function readSip() {
+    if (md.sipOn !== 'yes') return { sip: null };
+    const amount = Number(($('s-amt') || {}).value), date = ($('s-date') || {}).value;
+    if (!(amount > 0)) return { error: 'Enter the SIP amount per month' };
+    if (!date) return { error: 'Pick the date of your first SIP installment' };
+    return { sip: { amount, day: Number(date.slice(8)), start: date.slice(0, 7), on: true } };
+  }
+
+  // months before this one are settled right away, so only this month's SIP is ever asked about
+  function settlePastSip(inv, back) {
+    const cur = today().slice(0, 7);
+    inv.sip.done = inv.sip.done || {};
+    for (let m = inv.sip.start; m < cur; m = M.shiftMonth(m, 1)) {
+      if (inv.sip.done[m]) continue;
+      if (back === 'yes') {
+        const id = db.uid();
+        inv.entries.push({ id, date: M.sipDate(inv, m), amount: inv.sip.amount, w: false, note: 'SIP' });
+        inv.sip.done[m] = id;
+      } else inv.sip.done[m] = 'skipped';
+    }
   }
 
   function investView() {
@@ -138,7 +234,7 @@ export function createMoney(d) {
       const inv = M.investedOf(i), val = M.currentValue(i), g = val - inv;
       return `<div class="card inv" data-act="openInvest" data-id="${i.id}"><div class="row between"><b class="m-title">${esc(i.name)}</b><span class="tag">${esc(i.type)}</span></div>
         <div class="grid2" style="margin-top:12px"><div><div class="label">Invested</div><div class="val">${inr(inv)}</div></div><div><div class="label">Value now</div><div class="val">${inr(val)}</div></div></div>
-        <div class="${g >= 0 ? 'good' : 'bad'}" style="margin-top:8px;font-size:13px">${g >= 0 ? '+' : '-'}${inr(Math.abs(g))}${inv > 0 ? ` (${g >= 0 ? '+' : ''}${((g / inv) * 100).toFixed(1)}%)` : ''}</div></div>`;
+        <div class="${g >= 0 ? 'good' : 'bad'}" style="margin-top:8px;font-size:13px">${g >= 0 ? '+' : '-'}${inr(Math.abs(g))}${inv > 0 ? ` (${g >= 0 ? '+' : ''}${((g / inv) * 100).toFixed(1)}%)` : ''}${returnText(i)}</div>${sipLine(i)}</div>`;
     }).join('');
     return `<button class="btn" data-act="addInvest">+ Add investment</button>
       <div class="hero"><div class="label">Total invested</div><div class="num">${inr(invested)}</div><hr>
@@ -189,10 +285,11 @@ export function createMoney(d) {
   }
 
   function expenseForm(edit = null) {
-    md = { cat: edit ? edit.category : 'Food', person: edit ? edit.person || '' : '', id: edit ? edit.id : '' };
+    md = { cat: edit ? edit.category : 'Food', person: edit ? edit.person || '' : '', mode: edit && edit.mode === 'cash' ? 'cash' : 'online', id: edit ? edit.id : '' };
     openModal(`<h2>${edit ? 'Edit expense' : 'New expense'}</h2>
       <input id="m-amt" type="number" inputmode="decimal" placeholder="Amount ₹" value="${edit ? edit.amount : ''}">
       <span class="label">Category</span>${chipRow('cat', categories.map((c) => [c, c]), md.cat)}
+      <span class="label">Paid via</span>${chipRow('mode', [['online', 'Online'], ['cash', 'Cash']], md.mode)}
       <span class="label">Paid to (optional)</span>${peopleChips('person', md.person)}
       <input id="m-note" placeholder="Note (optional)" value="${edit ? esc(edit.note || '') : ''}" autocomplete="off">
       <input id="m-date" type="date" value="${edit ? edit.date : today()}">
@@ -208,9 +305,20 @@ export function createMoney(d) {
   }
 
   // ---------- bills ----------
+  function emiHint(total, pre) {
+    total = Number(total) || 0;
+    pre = Number(pre) || 0;
+    if (!total) return 'Leave empty if there is no fixed number of installments.';
+    if (pre >= total) return 'Already paid cannot be as much as the total.';
+    return `${pre} paid · ${total - pre} left to pay`;
+  }
+
   function billExtra() {
     const s = S();
-    if (md.kind === 'loan') return `<span class="label">EMIs left (optional)</span><input id="b-left" type="number" inputmode="numeric" placeholder="e.g. 12" value="${md.left || ''}">`;
+    if (md.kind === 'loan') return `<span class="label">Installments (optional)</span>
+      <div class="grid2"><input id="b-total" type="number" inputmode="numeric" placeholder="Total, e.g. 3" value="${md.total || ''}"><input id="b-pre" type="number" inputmode="numeric" placeholder="Already paid, e.g. 2" value="${md.pre || ''}"></div>
+      <div class="muted" id="b-emihint" style="margin:-2px 0 14px">${emiHint(md.total, md.pre)}</div>`;
+    if (md.kind === 'owed') return `<span class="label">Whom do you owe? (a person or an app)</span>${peopleChips('bperson', md.bperson)}<span class="label">Pay on</span><input id="b-date" type="date" value="${md.date || ''}">`;
     if (md.kind === 'family') return `<span class="label">Who gets it</span>${peopleChips('bperson', md.bperson)}`;
     if (md.kind === 'fixed') return `<span class="label">Category</span>${chipRow('bcat', FIXED_CATS.map((c) => [c, c]), md.bcat)}`;
     if (!s.investments.length) return '<div class="muted" style="margin-bottom:12px">Add an investment first (Invest tab), then link the SIP to it.</div>';
@@ -222,20 +330,21 @@ export function createMoney(d) {
     md = {
       id: edit ? edit.id : '', kind: edit ? edit.kind : 'loan', day: edit ? edit.dueDay : Number(today().slice(8)),
       bperson: edit ? edit.person || '' : '', bcat: edit ? edit.category || 'Bills' : 'Groceries', binv: edit ? edit.investmentId || '' : '',
-      left: edit && edit.endMonth ? M.emisLeft(edit, m, !!(edit.paid || {})[m]) : '',
+      total: edit ? M.emiStats(edit).total || '' : '', pre: edit && M.emiStats(edit).total ? M.emiStats(edit).paid : '',
+      date: edit && edit.dueDate ? edit.dueDate : '',
     };
     openModal(`<h2>${edit ? 'Edit bill' : 'Add bill'}</h2>
       <span class="label">Type</span>${chipRow('kind', BILL_KINDS, md.kind)}
-      <input id="b-name" placeholder="Name, e.g. Bike EMI, Groceries, Mummy" value="${edit ? esc(edit.name) : ''}" autocomplete="off">
-      <input id="b-amt" type="number" inputmode="decimal" placeholder="Amount per month ₹" value="${edit ? edit.amount : ''}">
-      <span class="label">Due day</span><button class="capsule set" id="b-day" data-act="pickBillDay"><span>${ordinal(md.day)} of every month</span></button>
+      <input id="b-name" placeholder="Name, e.g. Bike EMI, Groceries, Sister's loan" value="${edit ? esc(edit.name) : ''}" autocomplete="off">
+      <input id="b-amt" type="number" inputmode="decimal" placeholder="Amount ₹ (per month for repeating bills)" value="${edit ? edit.amount : ''}">
+      <div id="b-dayrow" ${md.kind === 'owed' ? 'hidden' : ''}><span class="label">Due day</span><button class="capsule set" id="b-day" data-act="pickBillDay"><span>${ordinal(md.day)} of every month</span></button></div>
       <div id="bill-extra">${billExtra()}</div>
       <button class="btn" data-act="saveBill">Save</button>
       ${edit ? '<button class="btn danger" style="margin-top:10px" data-act="delBill">Delete bill</button>' : ''}`);
   }
 
   function payForm(c) {
-    md = { id: c.id, ym: today().slice(0, 7) };
+    md = { id: c.id, ym: today().slice(0, 7), key: M.payKey(c, today().slice(0, 7)) };
     openModal(`<h2>Pay ${esc(c.name)}</h2>
       <div class="muted" style="margin:-8px 0 14px">${c.kind === 'sip' ? 'The amount goes into your investment.' : 'This is added to your expenses.'}</div>
       <span class="label">Amount ₹</span><input id="m-amt" type="number" inputmode="decimal" value="${c.amount}">
@@ -244,7 +353,7 @@ export function createMoney(d) {
   }
 
   function unlinkPaid(id) {
-    S().commitments.forEach((c) => { Object.keys(c.paid || {}).forEach((k) => { if (c.paid[k] === id) delete c.paid[k]; }); });
+    S().commitments.forEach((c) => { Object.keys(c.paid || {}).forEach((k) => { if (c.paid[k] === id) { delete c.paid[k]; if (c.paidOn) delete c.paidOn[k]; } }); });
   }
 
   // ---------- investments ----------
@@ -259,7 +368,8 @@ export function createMoney(d) {
       <div class="grid2"><div><div class="label">Invested</div><div class="val">${inr(inv)}</div></div><div><div class="label">Value now</div><div class="val">${inr(val)}</div></div></div>
       <div class="${g >= 0 ? 'good' : 'bad'}" style="margin:8px 0 16px;font-size:13px">${g >= 0 ? '+' : '-'}${inr(Math.abs(g))}${inv > 0 ? ` (${((g / inv) * 100).toFixed(1)}%)` : ''}</div>
       <div class="grid2"><button class="btn" data-act="invAdd" data-id="${i.id}">+ Add money</button><button class="btn alt" data-act="invWithdraw" data-id="${i.id}">Withdraw</button></div>
-      <button class="btn alt" style="margin-top:10px" data-act="invValue" data-id="${i.id}">Update value now</button>
+      <div class="grid2" style="margin-top:10px"><button class="btn alt" data-act="invValue" data-id="${i.id}">Update value</button><button class="btn alt" data-act="invReturn" data-id="${i.id}">${hasReturn(i) ? 'Return ' + i.returnPct + '%' : 'Set return %'}</button></div>
+      ${i.sip && i.sip.on !== false ? `<div class="card" style="margin:14px 0 0"><div class="label">Monthly SIP</div><div class="val" style="margin:6px 0">${inr(i.sip.amount)} on the ${ordinal(i.sip.day)}</div><div class="muted">Since ${monthLabel(i.sip.start)}</div><div class="grid2" style="margin-top:12px"><button class="btn alt" data-act="sipEdit" data-id="${i.id}">Edit SIP</button><button class="btn danger" data-act="sipStop" data-id="${i.id}">Stop SIP</button></div></div>` : `<button class="btn alt" style="margin-top:10px" data-act="sipEdit" data-id="${i.id}">${i.sip ? 'Restart SIP' : 'Set up monthly SIP'}</button>`}
       <div class="label" style="margin:18px 0 6px">History</div><div class="log-list">${entries}</div>
       <button class="btn danger" style="margin-top:12px" data-act="invDelete" data-id="${i.id}">Delete investment</button>`);
   }
@@ -287,9 +397,97 @@ export function createMoney(d) {
       <button class="btn" data-act="closeModal">Done</button>`);
   }
 
+  function settleBill(c, amount, date, key) {
+    const id = db.uid();
+    if (c.kind === 'sip') {
+      const inv = S().investments.find((i) => i.id === c.investmentId);
+      if (inv) inv.entries.push({ id, date, amount, w: true, note: 'SIP' });
+    } else {
+      const category = c.kind === 'loan' ? 'Loan EMI' : c.kind === 'family' ? 'Family' : c.kind === 'owed' ? 'Repayment' : c.category || 'Bills';
+      S().transactions.push({ id, type: 'expense', amount, category, person: c.person || '', mode: 'online', note: c.name, date, linkId: c.id });
+    }
+    c.paid = { ...(c.paid || {}), [key]: id };
+    c.paidOn = { ...(c.paidOn || {}), [key]: date };
+  }
+
+  // ---------- SIP confirmation, in the app and from the popup over other apps ----------
+  function payInstallment(inv, m, amount, date) {
+    const id = db.uid();
+    inv.entries.push({ id, date, amount, w: true, note: 'SIP' });
+    inv.sip.done[m] = id;
+  }
+
+  // shows the oldest unconfirmed SIP; returns false when there is none or another sheet is open
+  function askSips() {
+    if (!$('modal').hidden) return false;
+    const due = M.sipDue(S());
+    if (!due.length) return false;
+    const { inv, m, date } = due[0];
+    md = { sipInv: inv.id, sipM: m };
+    openModal(`<div class="rv-step">SIP reminder${due.length > 1 ? ` · ${due.length} waiting` : ''}</div><h2>Did you pay your SIP?</h2>
+      <div class="rv-goal"><b>${esc(inv.name)}</b><span class="muted">${monthName(m)} installment · due ${dayName(date)}</span></div>
+      <span class="label">Amount you paid ₹</span><input id="sip-amt" type="number" inputmode="decimal" value="${inv.sip.amount}">
+      <button class="btn" data-act="sipYes">Yes, I paid</button>
+      <div class="grid2" style="margin-top:10px"><button class="btn alt" data-act="sipLater">Not yet</button><button class="btn alt" data-act="sipSkip">Skip this month</button></div>`);
+    return true;
+  }
+
+  // popup items for the native side: the next SIP dates and the next due dates of bills (09:00 on the day)
+  function confirmItems() {
+    const s = S(), t = today(), m0 = t.slice(0, 7), m1 = M.shiftMonth(m0, 1), out = [];
+    const at = (d) => new Date(`${d}T09:00`).getTime();
+    const now = Date.now();
+    const rs = (n) => '₹' + Math.round(n).toLocaleString('en-IN');
+    s.investments.forEach((inv) => {
+      if (!inv.sip || inv.sip.on === false) return;
+      [m0, m1].forEach((m) => {
+        if (m < inv.sip.start || (inv.sip.done || {})[m]) return;
+        const d = M.sipDate(inv, m);
+        if (at(d) > now) out.push({ key: `sip|${inv.id}|${m}`, title: 'SIP day', body: `Did you pay your ${rs(inv.sip.amount)} SIP for ${inv.name}?`, yes: 'Yes, paid', skip: true, at: at(d) });
+      });
+    });
+    s.commitments.forEach((c) => {
+      if (c.kind === 'owed') {
+        if (!(c.paid || {}).once && c.dueDate && at(c.dueDate) > now) out.push({ key: `bill|${c.id}|once`, title: `${c.person ? 'Give ' + c.person : 'Payment due'} ${rs(c.amount)}`, body: `${c.name}. Did you pay it?`, yes: 'Yes, paid', skip: false, at: at(c.dueDate) });
+        return;
+      }
+      [m0, m1].forEach((m) => {
+        if (!M.billActive(c, m) || (c.paid || {})[m]) return;
+        const d = M.dueDate(c, m);
+        if (at(d) > now) out.push({ key: `bill|${c.id}|${m}`, title: `${c.name} is due today`, body: `${rs(c.amount)}. Did you pay it?`, yes: 'Yes, paid', skip: false, at: at(d) });
+      });
+    });
+    return out.sort((a, b) => a.at - b.at).slice(0, 40);
+  }
+
+  // an answer given in the popup while the app was closed; returns true when something changed
+  function applyConfirm(key, answer) {
+    const [kind, id, m] = String(key).split('|');
+    const s = S();
+    if (kind === 'sip') {
+      const inv = s.investments.find((x) => x.id === id);
+      if (!inv || !inv.sip || (inv.sip.done || {})[m]) return false;
+      if (answer === 'yes') payInstallment(inv, m, inv.sip.amount, today());
+      else if (answer === 'skip') inv.sip.done[m] = 'skipped';
+      else return false;
+      return true;
+    }
+    if (kind === 'bill' && answer === 'yes') {
+      const c = s.commitments.find((x) => x.id === id);
+      if (!c || (c.paid || {})[m]) return false;
+      settleBill(c, c.amount, today(), m);
+      return true;
+    }
+    return false;
+  }
+
+  document.addEventListener('input', (e) => {
+    if (e.target.id === 'b-total' || e.target.id === 'b-pre') $('b-emihint').textContent = emiHint(($('b-total') || {}).value, ($('b-pre') || {}).value);
+  });
+
   // ---------- actions ----------
   const actions = {
-    mTab: (el) => { tab = el.dataset.v; d.render('fade'); },
+    mTab: (el) => { tab = el.dataset.v; billsMode = 'main'; d.render('fade'); },
     lentFilter: (el) => { lentFilter = el.dataset.v; d.render(); },
     mChip: (el) => {
       const g = el.dataset.g, v = el.dataset.v;
@@ -299,7 +497,8 @@ export function createMoney(d) {
         const a = $('m-amt');
         if (a && !a.value && S().settings.salaryAmount) a.value = S().settings.salaryAmount;
       }
-      if (g === 'kind') $('bill-extra').innerHTML = billExtra();
+      if (g === 'kind') { $('bill-extra').innerHTML = billExtra(); $('b-dayrow').hidden = v === 'owed'; }
+      if (g === 'sipOn') $('sip-box').hidden = v !== 'yes';
     },
     newPerson: async (el) => {
       const g = el.dataset.g;
@@ -330,7 +529,7 @@ export function createMoney(d) {
     saveExpense: async () => {
       const amount = Number($('m-amt').value);
       if (!(amount > 0)) return ui.alert('Enter an amount');
-      const data = { type: 'expense', amount, category: md.cat, person: md.person || '', note: $('m-note').value.trim(), date: $('m-date').value || today() };
+      const data = { type: 'expense', amount, category: md.cat, person: md.person || '', mode: md.mode === 'cash' ? 'cash' : 'online', note: $('m-note').value.trim(), date: $('m-date').value || today() };
       if (md.id) Object.assign(S().transactions.find((x) => x.id === md.id), data); else S().transactions.push({ id: db.uid(), ...data });
       if (data.person) addPerson(data.person);
       closeModal();
@@ -365,21 +564,31 @@ export function createMoney(d) {
     saveBill: async () => {
       const amount = Number($('b-amt').value);
       let name = $('b-name').value.trim();
-      if (!name && md.kind === 'family') name = md.bperson;
+      if (!name && (md.kind === 'family' || md.kind === 'owed')) name = md.bperson;
       if (!name) return ui.alert('Give this bill a name');
-      if (!(amount > 0)) return ui.alert('Enter the monthly amount');
+      if (!(amount > 0)) return ui.alert('Enter the amount');
+      const date = md.kind === 'owed' ? ($('b-date') || {}).value : '';
+      if (md.kind === 'owed' && !date) return ui.alert('Pick the date you have to pay on');
       if (md.kind === 'sip' && !md.binv) return ui.alert('Choose the investment this SIP goes into');
       const cur = today().slice(0, 7);
       const old = md.id ? S().commitments.find((c) => c.id === md.id) : null;
-      const left = md.kind === 'loan' ? Number(($('b-left') || {}).value) : 0;
+      const total = md.kind === 'loan' ? Math.floor(Number(($('b-total') || {}).value) || 0) : 0;
+      let pre = md.kind === 'loan' ? Math.floor(Number(($('b-pre') || {}).value) || 0) : 0;
+      if (total && pre >= total) return ui.alert('Already paid must be less than the total installments.');
+      // installments paid inside Prysm are counted from the payments themselves, the rest were paid before
+      const inApp = old ? M.emiStats({ ...old, paidBefore: 0 }).paid : 0;
+      pre = Math.max(0, pre - inApp);
       const c = {
         ...(old || { id: db.uid(), paid: {}, active: true, startMonth: md.day < Number(today().slice(8)) ? M.shiftMonth(cur, 1) : cur }),
         kind: md.kind, name, amount, dueDay: md.day,
-        person: md.kind === 'family' ? md.bperson : '',
+        person: md.kind === 'family' || md.kind === 'owed' ? md.bperson : '',
+        dueDate: date || '',
         category: md.kind === 'fixed' ? md.bcat : '',
         investmentId: md.kind === 'sip' ? md.binv : '',
-        endMonth: left > 0 ? M.shiftMonth(cur, left - 1 + (old && (old.paid || {})[cur] ? 1 : 0)) : '',
+        total,
+        paidBefore: total ? pre : 0,
       };
+      c.endMonth = total ? M.shiftMonth(c.startMonth || cur, total - c.paidBefore - 1) : '';
       if (md.bperson) addPerson(md.bperson);
       if (old) Object.assign(old, c); else S().commitments.push(c);
       closeModal();
@@ -397,49 +606,99 @@ export function createMoney(d) {
       const amount = Number($('m-amt').value);
       if (!c || !(amount > 0)) return ui.alert('Enter an amount');
       const date = $('m-date').value || today();
-      const id = db.uid();
-      if (c.kind === 'sip') {
-        const inv = S().investments.find((i) => i.id === c.investmentId);
-        if (!inv) return ui.alert('The linked investment was deleted. Edit this bill and pick another.');
-        inv.entries.push({ id, date, amount, w: true, note: 'SIP' });
-      } else {
-        const category = c.kind === 'loan' ? 'Loan EMI' : c.kind === 'family' ? 'Family' : c.category || 'Bills';
-        S().transactions.push({ id, type: 'expense', amount, category, person: c.person || '', note: c.name, date, linkId: c.id });
-      }
-      c.paid = { ...(c.paid || {}), [md.ym]: id };
+      if (c.kind === 'sip' && !S().investments.find((i) => i.id === c.investmentId)) return ui.alert('The linked investment was deleted. Edit this bill and pick another.');
+      settleBill(c, amount, date, md.key || md.ym);
       closeModal();
       await refresh();
     },
+    billsAll: () => { billsMode = 'all'; window.scrollTo(0, 0); d.render('up'); },
+    billsBack: () => { billsMode = 'main'; window.scrollTo(0, 0); d.render('up'); },
+    allFilter: (el) => { allFilter = el.dataset.v; d.render(); },
     unpay: async (el) => {
       const c = S().commitments.find((x) => x.id === el.dataset.id);
-      const m = today().slice(0, 7);
-      const id = c && (c.paid || {})[m];
+      const key = c && M.payKey(c, today().slice(0, 7));
+      const id = c && (c.paid || {})[key];
       if (!id) return;
       S().transactions = S().transactions.filter((t) => t.id !== id);
       S().investments.forEach((i) => { i.entries = i.entries.filter((e) => e.id !== id); });
-      delete c.paid[m];
+      delete c.paid[key];
+      if (c.paidOn) delete c.paidOn[key];
       await refresh();
     },
 
     addInvest: () => {
-      md = { itype: 'Digital gold' };
+      md = { itype: 'Digital gold', sipOn: 'no', sipBack: 'yes' };
       openModal(`<h2>Add investment</h2>
         <input id="i-name" placeholder="Name, e.g. Gold on PhonePe, Nifty 50 fund" autocomplete="off">
         <span class="label">Type</span>${chipRow('itype', INV_TYPES.map((t) => [t, t]), md.itype)}
         <input id="i-amt" type="number" inputmode="decimal" placeholder="Already invested ₹ (optional)">
         <input id="i-val" type="number" inputmode="decimal" placeholder="Value now ₹ (optional)">
+        <input id="i-ret" type="number" inputmode="decimal" placeholder="Return so far % (optional)">
         <div class="muted" style="margin:-2px 0 14px">Money you already invested does not change your wallet. Use Add money later for new investments.</div>
+        ${sipFields(null)}
         <button class="btn" data-act="saveInvest">Save</button>`);
     },
     saveInvest: async () => {
       const name = $('i-name').value.trim();
       if (!name) return ui.alert('Give it a name');
-      const amt = Number($('i-amt').value), val = $('i-val').value;
-      S().investments.push({ id: db.uid(), name, type: md.itype, value: val === '' ? null : Number(val), entries: amt > 0 ? [{ id: db.uid(), date: today(), amount: amt, w: false, note: 'Opening' }] : [] });
+      const amt = Number($('i-amt').value), val = $('i-val').value, ret = $('i-ret').value;
+      const parsed = readSip();
+      if (parsed.error) return ui.alert(parsed.error);
+      const inv = { id: db.uid(), name, type: md.itype, value: val === '' ? null : Number(val), returnPct: ret === '' ? null : Number(ret), sip: parsed.sip, entries: amt > 0 ? [{ id: db.uid(), date: today(), amount: amt, w: false, note: 'Opening' }] : [] };
+      if (inv.sip) settlePastSip(inv, md.sipBack);
+      S().investments.push(inv);
       closeModal();
-      await commit();
+      await refresh();
+      setTimeout(askSips, 350); // the sheet that just closed is still fading out
     },
     openInvest: (el) => investSheet(el.dataset.id),
+    invReturn: async (el) => {
+      const i = S().investments.find((x) => x.id === el.dataset.id);
+      const v = await ui.prompt('Return so far %', hasReturn(i) ? i.returnPct : '', 'e.g. 12.4 (or -3 for a loss)');
+      if (v === null) return;
+      i.returnPct = v === '' || !Number.isFinite(Number(v)) ? null : Number(v);
+      await commit();
+      investSheet(i.id);
+    },
+    sipEdit: (el) => {
+      const i = S().investments.find((x) => x.id === el.dataset.id);
+      md = { sipInv: i.id, sipOn: 'yes', sipBack: 'yes' };
+      openModal(`<h2>${i.sip ? 'Edit SIP' : 'Monthly SIP'}</h2><div class="muted" style="margin:-8px 0 14px">${esc(i.name)}</div>${sipFields(i)}<button class="btn" data-act="saveSip">Save SIP</button>`);
+    },
+    saveSip: async () => {
+      const i = S().investments.find((x) => x.id === md.sipInv);
+      const parsed = readSip();
+      if (parsed.error) return ui.alert(parsed.error);
+      i.sip = { ...(i.sip || {}), ...parsed.sip, done: (i.sip && i.sip.done) || {} };
+      settlePastSip(i, md.sipBack);
+      closeModal();
+      await refresh();
+      setTimeout(askSips, 350); // the sheet that just closed is still fading out
+    },
+    sipStop: async (el) => {
+      const i = S().investments.find((x) => x.id === el.dataset.id);
+      if (!(await ui.confirm('Money already added stays. Prysm just stops asking.', { title: 'Stop this SIP?', ok: 'Stop SIP', danger: true }))) return;
+      i.sip.on = false;
+      await refresh();
+      investSheet(i.id);
+    },
+    sipYes: async () => {
+      const found = M.sipDue(S()).find((d) => d.inv.id === md.sipInv && d.m === md.sipM);
+      const amount = Number($('sip-amt').value);
+      if (!found || !(amount > 0)) return ui.alert('Enter the amount you paid');
+      payInstallment(found.inv, found.m, amount, today());
+      closeModal();
+      await refresh();
+      setTimeout(askSips, 450);
+    },
+    sipSkip: async () => {
+      const found = M.sipDue(S()).find((d) => d.inv.id === md.sipInv && d.m === md.sipM);
+      if (found) found.inv.sip.done[found.m] = 'skipped';
+      closeModal();
+      await refresh();
+      setTimeout(askSips, 450);
+    },
+    sipLater: () => closeModal(),
     invAdd: async (el) => {
       const v = await ui.prompt('Add money', '', 'Amount ₹ (taken from wallet)');
       const n = Number(v);
@@ -464,6 +723,7 @@ export function createMoney(d) {
     invDelEntry: async (el) => {
       const i = S().investments.find((x) => x.id === el.dataset.id);
       i.entries = i.entries.filter((e) => e.id !== el.dataset.eid);
+      if (i.sip && i.sip.done) Object.keys(i.sip.done).forEach((k) => { if (i.sip.done[k] === el.dataset.eid) delete i.sip.done[k]; });
       unlinkPaid(el.dataset.eid);
       await commit(); investSheet(i.id);
     },
@@ -523,6 +783,9 @@ export function createMoney(d) {
     view,
     actions,
     openIncome: (source) => incomeForm(source),
+    askSips,
+    confirmItems,
+    applyConfirm,
     openWeekly,
     setTab: (k) => { tab = k; },
     getTab: () => tab,

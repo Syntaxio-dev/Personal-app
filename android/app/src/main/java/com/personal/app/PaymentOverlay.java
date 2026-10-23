@@ -30,6 +30,23 @@ final class PaymentOverlay {
         OverlayHost.remove(TAG);
     }
 
+    private static double parse(EditText e) {
+        try {
+            return Double.parseDouble(e.getText().toString().trim());
+        } catch (Exception ex) {
+            return 0;
+        }
+    }
+
+    private static void save(Context app, double amount, String mode, String payee, long ts, String category, String note) throws Exception {
+        JSONObject item = PaymentListenerService.baseItem(amount, payee, ts);
+        item.put("category", category);
+        item.put("note", note);
+        item.put("mode", mode);
+        item.put("status", "saved");
+        PaymentListenerService.addPending(app, item);
+    }
+
     static void show(Context ctx, double amount, final String payee, final long ts, final boolean test) {
         final Context app = ctx.getApplicationContext();
         final Context ui = OverlayHost.uiContext(ctx);
@@ -37,6 +54,10 @@ final class PaymentOverlay {
 
         LinearLayout root = OverlayHost.sheet(ui);
         root.addView(OverlayHost.label(ui, test ? "TEST · ADD EXPENSE" : "PAYMENT DETECTED · ADD EXPENSE"));
+        TextView onlineLabel = OverlayHost.muted(ui, "Paid online (from your payment alert, you can edit it)");
+        onlineLabel.setTextSize(12);
+        onlineLabel.setPadding(0, OverlayHost.dp(ui, 8), 0, 0);
+        root.addView(onlineLabel);
 
         final EditText amountEt = new EditText(ui);
         amountEt.setText(amount == Math.floor(amount) ? String.valueOf((long) amount) : String.valueOf(amount));
@@ -50,6 +71,9 @@ final class PaymentOverlay {
 
         final EditText noteEt = OverlayHost.input(ui, "Note (optional)", payee, false);
         root.addView(noteEt);
+
+        final EditText cashEt = OverlayHost.input(ui, "Also paid in cash ₹ (optional)", "", true);
+        root.addView(cashEt, OverlayHost.gapTop(ui, 10));
 
         LinearLayout chipRow = OverlayHost.row(ui);
         final List<TextView> chips = new ArrayList<>();
@@ -79,23 +103,16 @@ final class PaymentOverlay {
 
         skip.setOnClickListener(v -> dismiss(app));
         save.setOnClickListener(v -> {
-            double value;
-            try {
-                value = Double.parseDouble(amountEt.getText().toString().trim());
-            } catch (Exception e) {
-                value = 0;
-            }
-            if (value <= 0) {
+            double value = parse(amountEt), cash = parse(cashEt);
+            if (value <= 0 && cash <= 0) {
                 amountEt.setError("Enter an amount");
                 return;
             }
             if (!test) {
                 try {
-                    JSONObject item = PaymentListenerService.baseItem(value, payee, ts);
-                    item.put("category", chosen[0]);
-                    item.put("note", noteEt.getText().toString().trim());
-                    item.put("status", "saved");
-                    PaymentListenerService.addPending(app, item);
+                    String note = noteEt.getText().toString().trim();
+                    if (value > 0) save(app, value, "online", payee, ts, chosen[0], note);
+                    if (cash > 0) save(app, cash, "cash", payee, ts, chosen[0], note);
                     PaymentListenerService.rememberCategory(app, payee, chosen[0]);
                 } catch (Exception ignored) {
                     // the sheet closes either way; worst case the user re-adds it in the app

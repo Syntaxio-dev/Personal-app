@@ -136,7 +136,8 @@ final class PlanScheduler {
         PendingIntent pi = PendingIntent.getActivity(c, 4101, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         String name = prefs(c).getString("name", "");
         Notification n = new NotificationCompat.Builder(c, CHANNEL)
-                .setSmallIcon(android.R.drawable.ic_popup_reminder)
+                .setSmallIcon(R.drawable.ic_stat_prysm)
+                .setColor(0xFF7C3AED)
                 .setContentTitle("Plan tomorrow")
                 .setContentText((name.isEmpty() ? "What" : name + ", what") + "'s on for tomorrow? Tap to plan it.")
                 .setPriority(NotificationCompat.PRIORITY_HIGH)

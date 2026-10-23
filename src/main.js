@@ -23,7 +23,7 @@ import { createGoals } from './goalsui.js';
 import { pad, dateStr, today, addDays, daysBetween, dayName, dayLabel, fmtTime } from './dates.js';
 import { syncNotifications, initNotifications, planTime, exactAlarmsAllowed, openExactAlarmSettings, NAG_SLOTS, setNativePlan, setSyncHook } from './notify.js';
 
-const CATEGORIES = ['Food', 'Groceries', 'Petrol', 'Vehicle', 'Travel', 'Bills', 'Rent', 'Shopping', 'Health', 'Fun', 'Family', 'Friends', 'Loan EMI', 'Other'];
+const CATEGORIES = ['Food', 'Groceries', 'Petrol', 'Vehicle', 'Travel', 'Bills', 'Rent', 'Shopping', 'Health', 'Fun', 'Family', 'Friends', 'Loan EMI', 'Repayment', 'Other'];
 const STATUS = { P: 'Present', A: 'Absent', H: 'Half-day', L: 'Leave', O: 'Holiday' };
 // Absent is grey on purpose: grey reads as inactivity, red as an alarm
 const STATUS_COLOR = { P: '#4ade80', A: '#8b8b95', H: '#fbbf24', L: '#818cf8', O: '#a78bfa' };
@@ -187,7 +187,15 @@ const APP_NAMES = { 'com.phonepe.app': 'PhonePe', 'com.google.android.apps.nbu.p
 const appName = (pkg) => APP_NAMES[pkg] || (/mms|messag/i.test(pkg) ? 'SMS' : String(pkg).split('.').pop());
 const dot = (color) => `<span class="dot" style="color:${color}"></span>`;
 
-async function commit() { await db.save(); render(); }
+// the widgets on the home screen are redrawn shortly after every change
+let widgetTimer = 0;
+function queueWidgets() {
+  if (!Capacitor.isNativePlatform()) return;
+  clearTimeout(widgetTimer);
+  widgetTimer = setTimeout(() => { PaymentCapture.setWidgetData({ json: JSON.stringify(widgetData()) }).catch(() => {}); }, 500);
+}
+
+async function commit() { await db.save(); render(); queueWidgets(); }
 
 const monthPicker = () => `<div class="month">
   <button class="icon" data-act="prev">${svg('prev')}</button><b>${monthLabel(ym)}</b><button class="icon" data-act="next">${svg('next')}</button></div>`;
@@ -237,12 +245,19 @@ async function syncPayments() {
     const { items } = await PaymentCapture.takePending();
     const S = db.get();
     (items || []).forEach((p) => {
-      if (p.status === 'saved') S.transactions.push({ id: db.uid(), type: 'expense', amount: p.amount, category: p.category || 'Other', note: p.note || '', date: p.date || today() });
+      if (p.status === 'saved') S.transactions.push({ id: db.uid(), type: 'expense', amount: p.amount, category: p.category || 'Other', note: p.note || '', mode: p.mode === 'cash' ? 'cash' : 'online', date: p.date || today() });
       else S.inbox.push(p);
     });
     if (items && items.length) await db.save();
   } catch (e) { /* ignore */ }
+  try {
+    const { items } = await PaymentCapture.takeConfirms();
+    let changed = false;
+    (items || []).forEach((a) => { if (moneyUi.applyConfirm(a.key, a.answer)) changed = true; });
+    if (changed) { await db.save(); syncNotifications(); }
+  } catch (e) { /* older native build */ }
   let openPlan = false;
+  let launch = '';
   try {
     const planned = await PaymentCapture.takePlanned();
     const S = db.get();
@@ -252,10 +267,18 @@ async function syncPayments() {
     });
     if (planned.items && planned.items.length) { await db.save(); syncNotifications(); }
     openPlan = !!planned.openPlan;
+    launch = planned.launch || '';
   } catch (e) { /* older native build */ }
   render();
-  if (openPlan && $('modal').hidden) showPlan();
+  if (launch && launch !== 'plan' && $('modal').hidden) runLaunch(launch);
+  else if (openPlan && $('modal').hidden) showPlan();
   else if (db.get().inbox.length && $('modal').hidden) showInboxItem();
+  else moneyUi.askSips();
+}
+
+// a home screen widget button or notification asked Prysm to open straight into something
+function runLaunch(what) {
+  if (what === 'expense') { go('money'); moneyUi.setTab('overview'); moneyUi.actions.addExpense(); } else if (what === 'income') { go('money'); moneyUi.setTab('overview'); moneyUi.actions.addIncome(); } else if (what === 'task') { go('todo'); addTodoForm(); } else if (what === 'attendance') { go('att'); markDayForm(today()); } else if (what.startsWith('tab:')) go(what.slice(4));
 }
 
 // the native plan popup needs the time, the name and what is already planned for tomorrow
@@ -265,6 +288,25 @@ async function pushPlan() {
   const date = addDays(today(), 1);
   const titles = S.todos.filter((x) => x.date === date && !x.done).map((x) => x.title).slice(0, 30);
   await PaymentCapture.setPlan({ on: !!st.planOn, hour, minute, name: st.name || '', date, titles });
+  await PaymentCapture.setConfirms({ items: moneyUi.confirmItems() });
+  await PaymentCapture.setWidgetData({ json: JSON.stringify(widgetData()) });
+}
+
+// the numbers the home screen widgets show (they cannot run the app, so a snapshot is saved on every change)
+function widgetData() {
+  const S = db.get(), t = today();
+  const c = att.attCtx(S);
+  const month = att.rangeStats(c, `${t.slice(0, 7)}-01`, t);
+  const streak = att.streaks(c).cur;
+  const marked = S.attendance[t] && S.attendance[t].s !== 'A';
+  const left = S.todos.filter((x) => !x.done && x.date <= t);
+  const days = Array.from({ length: 14 }, (_, i) => att.dayKind(c, addDays(t, i - 13)));
+  const sp = money.safeToSpend(S);
+  return {
+    wallet: inr(sp.wallet),
+    att: { pct: month.pct === null ? '—' : month.pct + '%', sub: `This month${streak ? ' · ' + streak + '-day streak' : ''}`, today: marked ? STATUS[S.attendance[t].s] : 'not marked', days },
+    tasks: { left: left.length, items: left.slice(0, 3).map((x) => x.title) },
+  };
 }
 
 function showInboxItem() {
@@ -275,6 +317,7 @@ function showInboxItem() {
     <div class="label">Amount ₹</div><input id="f-amt" type="number" inputmode="decimal" value="${p.amount}">
     <div class="label">Category</div><select id="f-cat">${CATEGORIES.map((c) => `<option ${c === p.category ? 'selected' : ''}>${c}</option>`).join('')}</select>
     <div class="label">Note</div><input id="f-note" value="${esc(p.note || p.payee || '')}" placeholder="Note (optional)">
+    <div class="label">Also paid in cash ₹ (optional)</div><input id="f-cash" type="number" inputmode="decimal" placeholder="0">
     <div class="grid2"><button class="btn alt" data-act="skipInbox">Skip</button><button class="btn" data-act="saveInbox">Save expense</button></div>
     ${more ? `<div class="muted" style="margin-top:12px;text-align:center">${more} more waiting</div>` : ''}`);
 }
@@ -311,7 +354,7 @@ function dashWidget(id) {
       <div class="dfoot muted">${st.pct === null ? 'No data this month yet' : `${st.pct}% this month`}${sk.cur ? ` · ${sk.cur}-day streak` : ''}</div></div>`;
   }
   if (id === 'bills') {
-    const soon = money.billsFor(S, t.slice(0, 7), t).filter((b) => !b.paid && (b.late > 0 || b.due <= addDays(t, 7))).slice(0, 3);
+    const soon = [...money.billsFor(S, t.slice(0, 7), t), ...money.owedFor(S, t)].filter((b) => !b.paid && (b.late > 0 || b.due <= addDays(t, 7))).sort((a, b) => a.due.localeCompare(b.due)).slice(0, 3);
     if (!soon.length) return '';
     return `<div class="card dcard"><div class="dhead"><h2>Bills due</h2><button class="link" data-act="goBills">All bills</button></div>
       ${soon.map((b) => `<div class="drow"><div class="grow"><div class="t-title">${esc(b.c.name)}</div><div class="t-meta">${b.late ? `<span class="ptag late">${b.late} day${b.late === 1 ? '' : 's'} late</span>` : `Due ${dayName(b.due)}`}</div></div><b>${inr(b.c.amount)}</b><button class="pill" data-act="payBill" data-id="${b.c.id}">Pay</button></div>`).join('')}</div>`;
@@ -438,6 +481,7 @@ const views = {
       <div class="card"><h2>Profile</h2><span class="label">Your name</span><input id="s-name" value="${esc(st.name)}" placeholder="What should Prysm call you?" maxlength="30" autocomplete="off" style="margin-bottom:0"></div>
       <div class="card"><h2>Dashboard</h2>
         <div class="set-row"><div class="grow"><b>Customize</b><span>Choose what shows on your dashboard and in which order</span></div><button class="capsule set" style="margin:0" data-act="dashEdit"><span>Edit</span></button></div></div>
+      ${Capacitor.isNativePlatform() ? `<div class="card"><h2>Home screen widgets</h2><div class="sec" style="line-height:1.6">Long-press an empty spot on your home screen, tap <b>Widgets</b>, then pick <b>Prysm</b>:<br>• <b>Quick add</b>: expense, income, task, attendance<br>• <b>Today</b>: tasks left and your wallet<br>• <b>Attendance</b>: percentage and a 14-day graph</div></div>` : ''}
       <div class="card"><h2>Night planner</h2>
         ${row('Plan tomorrow', 'A nightly reminder to line up the next day', 'planOn')}
         <span class="label" style="margin-top:16px">I usually sleep at</span>
@@ -888,9 +932,11 @@ const actions = {
   reviewInbox: showInboxItem,
   saveInbox: async () => {
     const S = db.get(), p = S.inbox[0];
-    const amount = Number($('f-amt').value);
-    if (!(amount > 0)) return toast('Enter an amount');
-    S.transactions.push({ id: db.uid(), type: 'expense', amount, category: $('f-cat').value, note: $('f-note').value.trim(), date: p.date || today() });
+    const amount = Number($('f-amt').value), cash = Number($('f-cash').value);
+    if (!(amount > 0) && !(cash > 0)) return toast('Enter an amount');
+    const base = { type: 'expense', category: $('f-cat').value, note: $('f-note').value.trim(), date: p.date || today() };
+    if (amount > 0) S.transactions.push({ id: db.uid(), amount, mode: 'online', ...base });
+    if (cash > 0) S.transactions.push({ id: db.uid(), amount: cash, mode: 'cash', ...base });
     S.inbox.shift();
     closeModal(); await commit();
     if (S.inbox.length) showInboxItem();
@@ -1018,15 +1064,15 @@ const actions = {
   },
   capPlanTest: async () => {
     try {
-      await PaymentCapture.testPlanOverlay({ delayMs: 5000 });
-      await ui.alert('The Plan tomorrow popup appears in 5 seconds. Go to your home screen or any app to see it on top. Tasks you add there show up in Tasks.', 'Test started');
+      await PaymentCapture.testPlanOverlay({ delayMs: 2000 });
+      await ui.alert('The Plan tomorrow popup appears in 2 seconds. Go to your home screen or any app to see it on top. Tasks you add there show up in Tasks.', 'Test started');
     } catch (e) { toast(e.message || 'Could not start the test'); }
   },
   capAppSettings: async () => { try { await PaymentCapture.openAppSettings(); } catch (e) { toast('Could not open app settings'); } },
   capTest: async () => {
     try {
-      await PaymentCapture.testOverlay({ delayMs: 5000 });
-      await ui.alert('The test popup appears in 5 seconds. Switch to PhonePe or your home screen to see it show over that app.', 'Test started');
+      await PaymentCapture.testOverlay({ delayMs: 2000 });
+      await ui.alert('The test popup appears in 2 seconds. Switch to PhonePe or your home screen to see it show over that app.', 'Test started');
     } catch (e) { toast(e.message || 'Could not start the test'); }
   },
   capLog: async () => {
@@ -1182,6 +1228,8 @@ db.init().then(async () => {
   await initNotifications();
   render('up');
   listenForNotifications();
+  // on the phone syncPayments asks too; this makes the SIP question work everywhere
+  setTimeout(() => moneyUi.askSips(), 700);
   syncPayments();
   syncNotifications();
   goalsUi.checkDue({ force: true });

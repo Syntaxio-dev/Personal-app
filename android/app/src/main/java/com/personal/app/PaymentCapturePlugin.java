@@ -137,9 +137,10 @@ public class PaymentCapturePlugin extends Plugin {
         try {
             JSObject r = new JSObject();
             r.put("items", new JSArray(PlanScheduler.takePending(getContext()).toString()));
-            boolean open = PlanScheduler.prefs(getContext()).getBoolean("openPlan", false);
-            if (open) PlanScheduler.prefs(getContext()).edit().putBoolean("openPlan", false).apply();
-            r.put("openPlan", open);
+            String launch = PlanScheduler.prefs(getContext()).getString("launch", "");
+            if (!launch.isEmpty()) PlanScheduler.prefs(getContext()).edit().putString("launch", "").apply();
+            r.put("launch", launch);
+            r.put("openPlan", "plan".equals(launch));
             call.resolve(r);
         } catch (Exception e) {
             call.reject("Could not read planned tasks", e);
@@ -162,6 +163,36 @@ public class PaymentCapturePlugin extends Plugin {
                 PaymentListenerService.log(app, "prysm", null, "test plan popup failed: " + e);
             }
         }, delay);
+        call.resolve();
+    }
+
+    // ---------- "did you pay it?" popups for SIPs and bills ----------
+    @PluginMethod
+    public void setConfirms(PluginCall call) {
+        try {
+            ConfirmScheduler.configure(getContext(), call.getArray("items", new JSArray()));
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("Could not schedule the reminders", e);
+        }
+    }
+
+    @PluginMethod
+    public void takeConfirms(PluginCall call) {
+        try {
+            JSObject r = new JSObject();
+            r.put("items", new JSArray(ConfirmScheduler.takeResults(getContext()).toString()));
+            call.resolve(r);
+        } catch (Exception e) {
+            call.reject("Could not read the answers", e);
+        }
+    }
+
+    // ---------- home screen widgets ----------
+    @PluginMethod
+    public void setWidgetData(PluginCall call) {
+        String json = call.getString("json", "{}");
+        WidgetKit.save(getContext(), json);
         call.resolve();
     }
 

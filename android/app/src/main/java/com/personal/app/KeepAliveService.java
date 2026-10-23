@@ -60,7 +60,8 @@ public class KeepAliveService extends Service {
         Intent open = new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent pi = PendingIntent.getActivity(this, 4201, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         Notification n = new NotificationCompat.Builder(this, CHANNEL)
-                .setSmallIcon(android.R.drawable.ic_popup_reminder)
+                .setSmallIcon(R.drawable.ic_stat_prysm)
+                .setColor(0xFF7C3AED)
                 .setContentTitle("Prysm is ready")
                 .setContentText("Keeps payment and planning popups working")
                 .setOngoing(true)

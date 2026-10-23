@@ -50,7 +50,7 @@ public class PaymentListenerService extends NotificationListenerService {
     static final String KEY_PAYEE_CATS = "payee_cats";
     static final String CHANNEL = "payment_expense";
 
-    static final String[] CATEGORIES = {"Food", "Groceries", "Petrol", "Vehicle", "Travel", "Bills", "Rent", "Shopping", "Health", "Fun", "Family", "Friends", "Loan EMI", "Other"};
+    static final String[] CATEGORIES = {"Food", "Groceries", "Petrol", "Vehicle", "Travel", "Bills", "Rent", "Shopping", "Health", "Fun", "Family", "Friends", "Loan EMI", "Repayment", "Other"};
 
     private static final Set<String> UPI_APPS = new HashSet<>(Arrays.asList(
             "com.phonepe.app",
@@ -310,7 +310,8 @@ public class PaymentListenerService extends NotificationListenerService {
         PendingIntent pi = PendingIntent.getActivity(ctx, id, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         String amt = (amount == Math.floor(amount)) ? String.valueOf((long) amount) : String.valueOf(amount);
         Notification out = new NotificationCompat.Builder(ctx, CHANNEL)
-                .setSmallIcon(android.R.drawable.ic_menu_add)
+                .setSmallIcon(R.drawable.ic_stat_prysm)
+                .setColor(0xFF7C3AED)
                 .setContentTitle("Add expense? \u20B9" + amt)
                 .setContentText(payee.isEmpty() ? "Tap to categorise this payment" : "Paid to " + payee + " \u2013 tap to categorise")
                 .setPriority(NotificationCompat.PRIORITY_HIGH)

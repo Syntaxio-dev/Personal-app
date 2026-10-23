@@ -53,6 +53,22 @@ jobs.push(write(join(RES, 'drawable', 'splash.png'), await onBlack(480, 320, 0.5
 // Android 12+ splash icon: the system crops it to a circle, so keep the hexagon well inside
 jobs.push(write(join(RES, 'drawable-nodpi', 'splash_icon.png'), await onBlack(1152, 1152, 0.7)));
 
+// notification icon: Android only uses the shape (alpha) of a status-bar icon, so it is a white hexagon
+// cut out of the logo (the black background and the gap between the halves become transparent)
+const crop = await sharp(SRC).extract({ left: 189, top: 175, width: 880, height: 880 }).toBuffer();
+for (const [d, px] of Object.entries({ mdpi: 24, hdpi: 36, xhdpi: 48, xxhdpi: 72, xxxhdpi: 96 })) {
+  const { data, info } = await sharp(crop).resize(px, px).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const out = Buffer.alloc(info.width * info.height * 4);
+  for (let i = 0; i < info.width * info.height; i++) {
+    const m = Math.max(data[i * 3], data[i * 3 + 1], data[i * 3 + 2]);
+    out[i * 4] = out[i * 4 + 1] = out[i * 4 + 2] = 255;
+    out[i * 4 + 3] = Math.max(0, Math.min(255, (m - 24) * 4));
+  }
+  const file = join(RES, `drawable-${d}`, 'ic_stat_prysm.png');
+  mkdirSync(dirname(file), { recursive: true });
+  jobs.push(sharp(out, { raw: { width: info.width, height: info.height, channels: 4 } }).png().toFile(file));
+}
+
 // web: favicon and the logo shown inside the app
 jobs.push(write(join(root, 'public', 'favicon.png'), await sharp(await onBlack(192, 192, 1)).composite([{ input: mask(192, 'square'), blend: 'dest-in' }]).png().toBuffer()));
 jobs.push(write(join(root, 'src', 'assets', 'logo.png'), await sharp(await onBlack(256, 256, 1)).composite([{ input: mask(256, 'square'), blend: 'dest-in' }]).png().toBuffer()));
