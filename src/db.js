@@ -59,10 +59,28 @@ export async function init() {
 
 export const get = () => state;
 
-export async function save() {
+async function writeOnce() {
   const json = JSON.stringify(state);
-  if (conn) await conn.run('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)', ['state', json]);
+  // one statement is already atomic; asking for a transaction too made overlapping saves fail on the phone
+  if (conn) await conn.run('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)', ['state', json], false);
   else localStorage.setItem(LS_KEY, json);
+}
+
+let queue = Promise.resolve();
+let onSaveError = null;
+export const setSaveErrorHandler = (fn) => { onSaveError = fn; };
+
+// Saves run strictly one after another and always write the latest state. A failed write is retried
+// before the user hears about it. This never rejects, so a screen always redraws after a change.
+export function save() {
+  queue = queue.then(async () => {
+    let error;
+    for (let i = 0; i < 4; i++) {
+      try { await writeOnce(); return; } catch (e) { error = e; await new Promise((r) => setTimeout(r, 120 * (i + 1))); }
+    }
+    if (onSaveError) onSaveError(error);
+  });
+  return queue;
 }
 
 export const exportJson = () => JSON.stringify({ app: 'prysm', version: 1, data: state }, null, 2);
@@ -82,7 +100,7 @@ function sanitize(s) {
   const list = (v) => (Array.isArray(v) ? v.filter((x) => x && typeof x === 'object') : []);
   s.transactions = list(s.transactions).filter((t) => day(t.date)).map((t) => ({ ...t, id: str(t.id), type: t.type === 'income' ? 'income' : 'expense', amount: num(t.amount), category: str(t.category), note: str(t.note), person: str(t.person), mode: t.mode === 'cash' ? 'cash' : 'online' }));
   s.todos = list(s.todos).filter((t) => day(t.date)).map((t) => ({ ...t, id: str(t.id), title: str(t.title), time: /^\d{2}:\d{2}$/.test(str(t.time)) ? t.time : '', pri: ['high', 'med', 'low'].includes(t.pri) ? t.pri : 'med', doneAt: num(t.doneAt), done: !!t.done }));
-  s.commitments = list(s.commitments).map((c) => ({ ...c, id: str(c.id), name: str(c.name), amount: num(c.amount), total: num(c.total), paidBefore: num(c.paidBefore), paidOn: c.paidOn && typeof c.paidOn === 'object' ? c.paidOn : {}, dueDay: Math.min(31, Math.max(1, num(c.dueDay) || 1)), paid: c.paid && typeof c.paid === 'object' ? c.paid : {} }));
+  s.commitments = list(s.commitments).map((c) => ({ ...c, id: str(c.id), name: str(c.name), amount: num(c.amount), inst: list(c.inst).filter((i) => day(i.date)).map((i) => ({ id: str(i.id), date: day(i.date), amount: num(i.amount) })), total: num(c.total), paidBefore: num(c.paidBefore), paidOn: c.paidOn && typeof c.paidOn === 'object' ? c.paidOn : {}, dueDay: Math.min(31, Math.max(1, num(c.dueDay) || 1)), paid: c.paid && typeof c.paid === 'object' ? c.paid : {} }));
   const sipOf = (x) => (x && typeof x === 'object' && /^\d{4}-\d{2}$/.test(str(x.start)) ? { amount: num(x.amount), day: Math.min(31, Math.max(1, num(x.day) || 1)), start: x.start, on: x.on !== false, done: x.done && typeof x.done === 'object' ? x.done : {} } : null);
   s.investments = list(s.investments).map((i) => ({ ...i, id: str(i.id), name: str(i.name), type: str(i.type), returnPct: i.returnPct === null || i.returnPct === undefined || i.returnPct === '' ? null : num(i.returnPct), sip: sipOf(i.sip), value: i.value === null || i.value === undefined || i.value === '' ? null : num(i.value), entries: list(i.entries).map((e) => ({ ...e, amount: num(e.amount), date: day(e.date) || '1970-01-01' })) }));
   s.lent = list(s.lent).map((l) => ({ ...l, id: str(l.id), person: str(l.person), amount: num(l.amount), note: str(l.note), date: day(l.date) || '1970-01-01', due: day(l.due), returns: list(l.returns).map((r) => ({ ...r, amount: num(r.amount) })) }));

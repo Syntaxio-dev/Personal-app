@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import * as db from './db.js';
 import { addDays, today } from './dates.js';
-import { billActive, dueDate, lentLeft, owedFor, salaryAdded, salaryDate, shiftMonth } from './money.js';
+import { billActive, datedFor, dueDate, lentLeft, salaryAdded, salaryDate, shiftMonth } from './money.js';
 
 const CHANNEL = 'prysm';
 
@@ -123,17 +123,17 @@ export async function syncNotifications() {
       });
     }
 
-    // money I owe someone, due on one fixed date
+    // money I owe someone and installments on set dates: each one has its own day
     if (st.billOn) {
-      owedFor(S).filter((b) => !b.paid).forEach(({ c, due }) => {
+      datedFor(S).filter((b) => !b.paid).forEach(({ c, due, key, amount }) => {
         const who = c.person ? `Give ${c.person} ` : 'Pay ';
         const before = at(addDays(due, -1), '09:00');
         const onDay = at(due, '09:00');
-        if (before > now) list.push({ id: hash(c.id + 'ob'), channelId: CHANNEL, title: 'Payment due tomorrow', body: `${who}${rupees(c.amount)} tomorrow (${c.name}).`, schedule: { at: before, allowWhileIdle: true }, extra: { type: 'bill' } });
-        if (onDay > now) list.push({ id: hash(c.id + 'od1'), channelId: CHANNEL, title: 'Payment due today', body: `${who}${rupees(c.amount)} today (${c.name}).`, schedule: { at: onDay, allowWhileIdle: true }, extra: { type: 'bill' } });
+        if (before > now) list.push({ id: hash(c.id + key + 'ob'), channelId: CHANNEL, title: 'Payment due tomorrow', body: `${who}${rupees(amount)} tomorrow (${c.name}).`, schedule: { at: before, allowWhileIdle: true }, extra: { type: 'bill' } });
+        if (onDay > now) list.push({ id: hash(c.id + key + 'od1'), channelId: CHANNEL, title: 'Payment due today', body: `${who}${rupees(amount)} today (${c.name}).`, schedule: { at: onDay, allowWhileIdle: true }, extra: { type: 'bill' } });
         if (due <= todayStr) {
           const first = nextOccurrence(at(addDays(due, 1), '10:00'), now);
-          list.push({ id: hash(c.id + 'oo'), channelId: CHANNEL, title: 'Payment overdue', body: `${who}${rupees(c.amount)} (${c.name}). It was due on ${due.slice(8)}/${due.slice(5, 7)}.`, schedule: { at: first, repeats: true, every: 'day', allowWhileIdle: true }, extra: { type: 'bill' } });
+          list.push({ id: hash(c.id + key + 'oo'), channelId: CHANNEL, title: 'Payment overdue', body: `${who}${rupees(amount)} (${c.name}). It was due on ${due.slice(8)}/${due.slice(5, 7)}.`, schedule: { at: first, repeats: true, every: 'day', allowWhileIdle: true }, extra: { type: 'bill' } });
         }
       });
     }

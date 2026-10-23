@@ -468,3 +468,8 @@ html, body { max-width: 100%; }
 .about-head { display: flex; align-items: center; gap: 16px; }
 .about-logo { width: 52px; height: 52px; border-radius: 14px; flex: none; box-shadow: 0 6px 20px rgba(124,58,237,0.35); }
 .about-head .about-name { margin-bottom: 4px; }
+
+/* ---------- installment rows (plans on set dates) ---------- */
+.inst-row { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) auto; gap: 8px; align-items: start; }
+.inst-row input { margin-bottom: 8px; min-width: 0; }
+.inst-row .icon { margin-top: 4px; }

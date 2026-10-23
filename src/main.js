@@ -197,6 +197,14 @@ function queueWidgets() {
 
 async function commit() { await db.save(); render(); queueWidgets(); }
 
+// if a save still fails after its retries, say so (once in a while) instead of losing the change silently
+let lastSaveAlert = 0;
+db.setSaveErrorHandler((e) => {
+  if (Date.now() - lastSaveAlert < 30000) return;
+  lastSaveAlert = Date.now();
+  ui.alert(`Prysm could not save your last change (${(e && e.message) || e}). It is kept in memory and will be saved with your next change. Export a backup from Settings to be safe.`, 'Save problem');
+});
+
 const monthPicker = () => `<div class="month">
   <button class="icon" data-act="prev">${svg('prev')}</button><b>${monthLabel(ym)}</b><button class="icon" data-act="next">${svg('next')}</button></div>`;
 
@@ -354,10 +362,10 @@ function dashWidget(id) {
       <div class="dfoot muted">${st.pct === null ? 'No data this month yet' : `${st.pct}% this month`}${sk.cur ? ` · ${sk.cur}-day streak` : ''}</div></div>`;
   }
   if (id === 'bills') {
-    const soon = [...money.billsFor(S, t.slice(0, 7), t), ...money.owedFor(S, t)].filter((b) => !b.paid && (b.late > 0 || b.due <= addDays(t, 7))).sort((a, b) => a.due.localeCompare(b.due)).slice(0, 3);
+    const soon = [...money.billsFor(S, t.slice(0, 7), t), ...money.datedFor(S, t)].filter((b) => !b.paid && (b.late > 0 || b.due <= addDays(t, 7))).sort((a, b) => a.due.localeCompare(b.due)).slice(0, 3);
     if (!soon.length) return '';
     return `<div class="card dcard"><div class="dhead"><h2>Bills due</h2><button class="link" data-act="goBills">All bills</button></div>
-      ${soon.map((b) => `<div class="drow"><div class="grow"><div class="t-title">${esc(b.c.name)}</div><div class="t-meta">${b.late ? `<span class="ptag late">${b.late} day${b.late === 1 ? '' : 's'} late</span>` : `Due ${dayName(b.due)}`}</div></div><b>${inr(b.c.amount)}</b><button class="pill" data-act="payBill" data-id="${b.c.id}">Pay</button></div>`).join('')}</div>`;
+      ${soon.map((b) => `<div class="drow"><div class="grow"><div class="t-title">${esc(b.c.name)}</div><div class="t-meta">${b.late ? `<span class="ptag late">${b.late} day${b.late === 1 ? '' : 's'} late</span>` : `Due ${dayName(b.due)}`}</div></div><b>${inr(b.amount !== undefined ? b.amount : b.c.amount)}</b><button class="pill" data-act="payBill" data-id="${b.c.id}" data-inst="${b.key || ''}">Pay</button></div>`).join('')}</div>`;
   }
   if (id === 'goals' || id === 'bucket') return goalsUi.widget(id);
   return '';

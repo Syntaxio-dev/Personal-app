@@ -35,11 +35,24 @@ const jobs = [];
 for (const [d, k] of Object.entries(dpis)) {
   const legacy = Math.round(48 * k), fg = Math.round(108 * k);
   const full = await onBlack(legacy, legacy, 1);
-  for (const [name, shape] of [['ic_launcher', 'square'], ['ic_launcher_round', 'round']]) {
+  for (const [name, shape] of [['ic_prysm', 'square'], ['ic_prysm_round', 'round']]) {
     jobs.push(write(join(RES, `mipmap-${d}`, `${name}.png`), await sharp(full).composite([{ input: mask(legacy, shape), blend: 'dest-in' }]).png().toBuffer()));
   }
   // the hexagon stays inside the 66dp safe zone of the adaptive icon
-  jobs.push(write(join(RES, `mipmap-${d}`, 'ic_launcher_foreground.png'), await onBlack(fg, fg, 0.8)));
+  jobs.push(write(join(RES, `mipmap-${d}`, 'ic_prysm_foreground.png'), await onBlack(fg, fg, 0.8)));
+  // themed icon (Android 13+): the hexagon as a flat silhouette the launcher can tint
+  const monoCrop = await sharp(SRC).extract({ left: 189, top: 175, width: 880, height: 880 }).resize(Math.round(fg * 0.62), Math.round(fg * 0.62)).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const mono = Buffer.alloc(fg * fg * 4);
+  const off = Math.round((fg - monoCrop.info.width) / 2);
+  for (let y = 0; y < monoCrop.info.height; y++) {
+    for (let x = 0; x < monoCrop.info.width; x++) {
+      const i = (y * monoCrop.info.width + x) * 3;
+      const o = ((y + off) * fg + (x + off)) * 4;
+      mono[o] = mono[o + 1] = mono[o + 2] = 255;
+      mono[o + 3] = Math.max(0, Math.min(255, (Math.max(monoCrop.data[i], monoCrop.data[i + 1], monoCrop.data[i + 2]) - 24) * 4));
+    }
+  }
+  jobs.push(sharp(mono, { raw: { width: fg, height: fg, channels: 4 } }).png().toFile(join(RES, `mipmap-${d}`, 'ic_prysm_mono.png')));
 }
 
 // splash screens (used before Android 12)

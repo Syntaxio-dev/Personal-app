@@ -4,9 +4,9 @@ import * as M from './money.js';
 
 const SOURCES = [['salary', 'Salary'], ['zomato', 'Zomato'], ['other', 'Other']];
 // two kinds of bills: repeating every month (installments, family, fixed) and one-time debts with a fixed date
-const BILL_KINDS = [['loan', 'Installment (EMI)'], ['owed', 'I owe someone'], ['family', 'Family'], ['fixed', 'Fixed bill']];
-const KIND_LABEL = { ...Object.fromEntries(BILL_KINDS), owed: 'I owe', loan: 'Loan EMI', sip: 'SIP' };
-const KIND_COLOR = { loan: '#f87171', owed: '#fb923c', family: '#a78bfa', fixed: '#fbbf24', sip: '#4ade80' };
+const BILL_KINDS = [['loan', 'EMI, same day every month'], ['plan', 'Installments on set dates'], ['owed', 'I owe someone'], ['family', 'Family'], ['fixed', 'Fixed bill']];
+const KIND_LABEL = { ...Object.fromEntries(BILL_KINDS), owed: 'I owe', loan: 'Loan EMI', plan: 'Installment', sip: 'SIP' };
+const KIND_COLOR = { loan: '#f87171', plan: '#f87171', owed: '#fb923c', family: '#a78bfa', fixed: '#fbbf24', sip: '#4ade80' };
 const FIXED_CATS = ['Groceries', 'Bills', 'Rent', 'Other'];
 const INV_TYPES = ['Digital gold', 'Mutual fund', 'FD / RD', 'Stocks', 'Other'];
 
@@ -135,7 +135,9 @@ export function createMoney(d) {
           <div class="m-sub">${status}</div></div>
         <div class="m-right"><b>${inr(c.amount)}</b>${b.paid ? `<button class="pill ghost" data-act="unpay" data-id="${c.id}">Undo</button>` : `<button class="pill" data-act="payBill" data-id="${c.id}">Pay</button>`}</div></div>`;
     }).join('');
-    const owed = M.owedFor(s, t).filter((b) => !b.paid || M.isRecent(b, t));
+    const dated = M.datedFor(s, t).filter((b) => !b.paid || M.isRecent(b, t));
+    const owed = dated.filter((b) => !b.inst);
+    const planned = dated.filter((b) => b.inst);
     const owedRows = owed.map((b) => {
       const c = b.c;
       const status = b.paid ? '<span class="good">Paid</span>' : b.late ? `<span class="bad">${b.late} day${b.late === 1 ? '' : 's'} late · was due ${dayName(b.due)}</span>` : `Pay on ${dayName(b.due)}`;
@@ -144,16 +146,24 @@ export function createMoney(d) {
           <div class="m-sub">${c.person ? 'Give ' + esc(c.person) : 'One-time payment'}</div><div class="m-sub">${status}</div></div>
         <div class="m-right"><b>${inr(c.amount)}</b>${b.paid ? `<button class="pill ghost" data-act="unpay" data-id="${c.id}">Undo</button>` : `<button class="pill" data-act="payBill" data-id="${c.id}">Paid</button>`}</div></div>`;
     }).join('');
+    const plannedRows = planned.map((b) => {
+      const status = b.paid ? '<span class="good">Paid</span>' : b.late ? `<span class="bad">${b.late} day${b.late === 1 ? '' : 's'} late · was due ${dayName(b.due)}</span>` : `Pay on ${dayName(b.due)}`;
+      return `<div class="mrow ${b.paid ? 'paid' : ''}" style="--k:${KIND_COLOR.plan}">
+        <div class="grow" data-act="editBill" data-id="${b.c.id}"><div class="m-title">${esc(b.c.name)}</div>
+          <div class="m-sub">Installment ${b.n} of ${b.total}</div><div class="m-sub">${status}</div></div>
+        <div class="m-right"><b>${inr(b.amount)}</b>${b.paid ? `<button class="pill ghost" data-act="unpay" data-id="${b.c.id}" data-inst="${b.key}">Undo</button>` : `<button class="pill" data-act="payBill" data-id="${b.c.id}" data-inst="${b.key}">Pay</button>`}</div></div>`;
+    }).join('');
     // an installment plan that was finished in the last 7 days (and is no longer in this month's list)
-    const finished = M.completedEmis(s).filter((x) => x.doneOn && x.doneOn >= addDays(t, -7) && !list.some((b) => b.c.id === x.c.id));
+    const finished = M.completedEmis(s).filter((x) => x.doneOn && x.doneOn >= addDays(t, -7) && !list.some((b) => b.c.id === x.c.id) && !planned.some((b) => b.c.id === x.c.id));
     const finishedRows = finished.map(({ c, stats }) => `<div class="mrow paid" style="--k:#4ade80"><div class="grow"><div class="m-title">${esc(c.name)}</div>
-      <div class="m-sub">All ${stats.total} installments paid</div><div class="m-sub"><span class="good">Completed</span></div></div><div class="m-right"><b>${inr(c.amount * stats.total)}</b></div></div>`).join('');
+      <div class="m-sub">All ${stats.total} installments paid</div><div class="m-sub"><span class="good">Completed</span></div></div><div class="m-right"><b>${inr(M.emiTotal(c))}</b></div></div>`).join('');
     const history = M.paymentHistory(s).length + M.completedEmis(s).length;
     return `<button class="btn" data-act="addBill">+ Add bill</button>
       <div class="card"><div class="row between"><h2 style="margin:0">${monthName(m)} bills</h2><b>${inr(paidAmt)} / ${inr(total)}</b></div>
         <div class="bar"><div style="width:${total ? (paidAmt / total) * 100 : 0}%"></div></div>
         <div class="muted" style="margin-top:8px">${list.length ? `${left} to pay · ${inr(total - paidAmt)} left this month` : 'Installments, groceries and money for family repeat every month. Add them here.'}</div></div>
       ${rows}
+      ${plannedRows ? `<div class="day-head"><div><b>Installments</b><span>On the dates you set</span></div><i>${planned.filter((b) => !b.paid).length}</i></div>${plannedRows}` : ''}
       ${owedRows ? `<div class="day-head"><div><b>Pay back</b><span>One time, on a fixed date</span></div><i>${owed.filter((b) => !b.paid).length}</i></div>${owedRows}` : ''}
       ${finishedRows ? `<div class="day-head"><div><b>Just completed</b><span>Moves to All payments after a week</span></div><i>${finished.length}</i></div>${finishedRows}` : ''}
       ${history ? `<button class="btn alt" data-act="billsAll">View all payments</button>` : ''}`;
@@ -168,8 +178,8 @@ export function createMoney(d) {
     let body;
     if (allFilter === 'emis') {
       body = done.length ? done.map(({ c, stats, doneOn }) => `<div class="mrow" style="--k:#4ade80"><div class="grow"><div class="m-title">${esc(c.name)}</div>
-        <div class="m-sub">${stats.total} installments of ${inr(c.amount)}${c.paidBefore ? ` · ${c.paidBefore} paid before Prysm` : ''}</div>
-        <div class="m-sub"><span class="good">Completed${doneOn ? ' ' + dayName(doneOn) : ''}</span></div></div><div class="m-right"><b>${inr(c.amount * stats.total)}</b></div></div>`).join('')
+        <div class="m-sub">${stats.total} installments${c.kind === 'plan' ? '' : ' of ' + inr(c.amount)}${c.paidBefore ? ` · ${c.paidBefore} paid before Prysm` : ''}</div>
+        <div class="m-sub"><span class="good">Completed${doneOn ? ' ' + dayName(doneOn) : ''}</span></div></div><div class="m-right"><b>${inr(M.emiTotal(c))}</b></div></div>`).join('')
         : '<div class="empty"><b>No completed installment plans yet</b><span>When you pay the last installment of an EMI it is kept here.</span></div>';
     } else if (!hist.length) {
       body = '<div class="empty"><b>No payments yet</b><span>Every bill, debt and SIP you mark as paid is kept here for good.</span></div>';
@@ -313,8 +323,19 @@ export function createMoney(d) {
     return `${pre} paid · ${total - pre} left to pay`;
   }
 
+  // installments on set dates: a list of {date, amount} rows
+  function instRows() {
+    return md.insts.map((it, i) => `<div class="inst-row"><input type="date" data-i="${i}" data-f="date" value="${it.date || ''}" aria-label="Installment date"><input type="number" inputmode="decimal" placeholder="₹" data-i="${i}" data-f="amount" value="${it.amount || ''}" aria-label="Installment amount"><button class="icon" data-act="instDel" data-i="${i}" aria-label="Remove">${svg('trash')}</button></div>`).join('');
+  }
+
   function billExtra() {
     const s = S();
+    if (md.kind === 'plan') {
+      const done = (md.donePlan || []).map((i) => `<div class="muted" style="margin-bottom:6px">Paid · ${dayName(i.date)} · ${inr(i.amount)}</div>`).join('');
+      return `${done}<span class="label">Installments still to pay</span><div id="inst-list">${instRows()}</div>
+        <button class="btn alt sm" style="margin-bottom:14px" data-act="instAdd">+ Add installment</button>
+        <span class="label">Already paid before (optional)</span><input id="b-pre" type="number" inputmode="numeric" placeholder="e.g. 1" value="${md.pre || ''}">`;
+    }
     if (md.kind === 'loan') return `<span class="label">Installments (optional)</span>
       <div class="grid2"><input id="b-total" type="number" inputmode="numeric" placeholder="Total, e.g. 3" value="${md.total || ''}"><input id="b-pre" type="number" inputmode="numeric" placeholder="Already paid, e.g. 2" value="${md.pre || ''}"></div>
       <div class="muted" id="b-emihint" style="margin:-2px 0 14px">${emiHint(md.total, md.pre)}</div>`;
@@ -332,22 +353,42 @@ export function createMoney(d) {
       bperson: edit ? edit.person || '' : '', bcat: edit ? edit.category || 'Bills' : 'Groceries', binv: edit ? edit.investmentId || '' : '',
       total: edit ? M.emiStats(edit).total || '' : '', pre: edit && M.emiStats(edit).total ? M.emiStats(edit).paid : '',
       date: edit && edit.dueDate ? edit.dueDate : '',
+      insts: edit && edit.kind === 'plan' ? (edit.inst || []).filter((i) => !(edit.paid || {})[i.id]).map((i) => ({ ...i })) : [{ date: '', amount: '' }],
+      donePlan: edit && edit.kind === 'plan' ? (edit.inst || []).filter((i) => (edit.paid || {})[i.id]) : [],
     };
+    if (edit && edit.kind === 'plan') md.pre = edit.paidBefore || '';
     openModal(`<h2>${edit ? 'Edit bill' : 'Add bill'}</h2>
       <span class="label">Type</span>${chipRow('kind', BILL_KINDS, md.kind)}
       <input id="b-name" placeholder="Name, e.g. Bike EMI, Groceries, Sister's loan" value="${edit ? esc(edit.name) : ''}" autocomplete="off">
-      <input id="b-amt" type="number" inputmode="decimal" placeholder="Amount ₹ (per month for repeating bills)" value="${edit ? edit.amount : ''}">
-      <div id="b-dayrow" ${md.kind === 'owed' ? 'hidden' : ''}><span class="label">Due day</span><button class="capsule set" id="b-day" data-act="pickBillDay"><span>${ordinal(md.day)} of every month</span></button></div>
+      <div id="b-amtrow" ${md.kind === 'plan' ? 'hidden' : ''}><input id="b-amt" type="number" inputmode="decimal" placeholder="Amount ₹ (per month for repeating bills)" value="${edit && edit.kind !== 'plan' ? edit.amount : ''}"></div>
+      <div id="b-dayrow" ${md.kind === 'owed' || md.kind === 'plan' ? 'hidden' : ''}><span class="label">Due day</span><button class="capsule set" id="b-day" data-act="pickBillDay"><span>${ordinal(md.day)} of every month</span></button></div>
       <div id="bill-extra">${billExtra()}</div>
       <button class="btn" data-act="saveBill">Save</button>
       ${edit ? '<button class="btn danger" style="margin-top:10px" data-act="delBill">Delete bill</button>' : ''}`);
   }
 
-  function payForm(c) {
-    md = { id: c.id, ym: today().slice(0, 7), key: M.payKey(c, today().slice(0, 7)) };
+  async function savePlan(name) {
+    const rows = md.insts.filter((r) => r.date || r.amount);
+    if (!rows.length) return ui.alert('Add at least one installment with its date and amount');
+    if (rows.some((r) => !r.date || !(Number(r.amount) > 0))) return ui.alert('Every installment needs a date and an amount');
+    const old = md.id ? S().commitments.find((c) => c.id === md.id) : null;
+    const pre = Math.max(0, Math.floor(Number(($('b-pre') || {}).value) || 0));
+    const kept = old ? (old.inst || []).filter((i) => (old.paid || {})[i.id]) : [];
+    const fresh = rows.map((r) => ({ id: r.id || db.uid(), date: r.date, amount: Number(r.amount) }));
+    const inst = [...kept, ...fresh].sort((a, b) => a.date.localeCompare(b.date));
+    const base = { kind: 'plan', name, amount: fresh[0].amount, dueDay: 1, person: '', dueDate: '', category: '', investmentId: '', endMonth: '', total: pre + inst.length, paidBefore: pre, inst };
+    if (old) Object.assign(old, base);
+    else S().commitments.push({ id: db.uid(), paid: {}, paidOn: {}, active: true, startMonth: today().slice(0, 7), ...base });
+    closeModal();
+    await refresh();
+  }
+
+  function payForm(c, instKey) {
+    md = { id: c.id, ym: today().slice(0, 7), key: instKey || M.payKey(c, today().slice(0, 7)) };
+    const planned = c.kind === 'plan' ? (c.inst || []).find((i) => i.id === instKey) : null;
     openModal(`<h2>Pay ${esc(c.name)}</h2>
       <div class="muted" style="margin:-8px 0 14px">${c.kind === 'sip' ? 'The amount goes into your investment.' : 'This is added to your expenses.'}</div>
-      <span class="label">Amount ₹</span><input id="m-amt" type="number" inputmode="decimal" value="${c.amount}">
+      <span class="label">Amount ₹</span><input id="m-amt" type="number" inputmode="decimal" value="${planned ? planned.amount : c.amount}">
       <span class="label">Date</span><input id="m-date" type="date" value="${today()}">
       <button class="btn" data-act="confirmPay">Mark paid</button>`);
   }
@@ -403,7 +444,7 @@ export function createMoney(d) {
       const inv = S().investments.find((i) => i.id === c.investmentId);
       if (inv) inv.entries.push({ id, date, amount, w: true, note: 'SIP' });
     } else {
-      const category = c.kind === 'loan' ? 'Loan EMI' : c.kind === 'family' ? 'Family' : c.kind === 'owed' ? 'Repayment' : c.category || 'Bills';
+      const category = c.kind === 'loan' || c.kind === 'plan' ? 'Loan EMI' : c.kind === 'family' ? 'Family' : c.kind === 'owed' ? 'Repayment' : c.category || 'Bills';
       S().transactions.push({ id, type: 'expense', amount, category, person: c.person || '', mode: 'online', note: c.name, date, linkId: c.id });
     }
     c.paid = { ...(c.paid || {}), [key]: id };
@@ -451,6 +492,12 @@ export function createMoney(d) {
         if (!(c.paid || {}).once && c.dueDate && at(c.dueDate) > now) out.push({ key: `bill|${c.id}|once`, title: `${c.person ? 'Give ' + c.person : 'Payment due'} ${rs(c.amount)}`, body: `${c.name}. Did you pay it?`, yes: 'Yes, paid', skip: false, at: at(c.dueDate) });
         return;
       }
+      if (c.kind === 'plan') {
+        (c.inst || []).forEach((it) => {
+          if (!(c.paid || {})[it.id] && at(it.date) > now) out.push({ key: `bill|${c.id}|${it.id}`, title: `${c.name}: installment due today`, body: `${rs(it.amount)}. Did you pay it?`, yes: 'Yes, paid', skip: false, at: at(it.date) });
+        });
+        return;
+      }
       [m0, m1].forEach((m) => {
         if (!M.billActive(c, m) || (c.paid || {})[m]) return;
         const d = M.dueDate(c, m);
@@ -475,14 +522,16 @@ export function createMoney(d) {
     if (kind === 'bill' && answer === 'yes') {
       const c = s.commitments.find((x) => x.id === id);
       if (!c || (c.paid || {})[m]) return false;
-      settleBill(c, c.amount, today(), m);
+      const planned = c.kind === 'plan' ? (c.inst || []).find((i) => i.id === m) : null;
+      settleBill(c, planned ? planned.amount : c.amount, today(), m);
       return true;
     }
     return false;
   }
 
   document.addEventListener('input', (e) => {
-    if (e.target.id === 'b-total' || e.target.id === 'b-pre') $('b-emihint').textContent = emiHint(($('b-total') || {}).value, ($('b-pre') || {}).value);
+    if (e.target.dataset && e.target.dataset.f && md.insts && md.insts[e.target.dataset.i]) md.insts[e.target.dataset.i][e.target.dataset.f] = e.target.value;
+    if ((e.target.id === 'b-total' || e.target.id === 'b-pre') && $('b-emihint')) $('b-emihint').textContent = emiHint(($('b-total') || {}).value, ($('b-pre') || {}).value);
   });
 
   // ---------- actions ----------
@@ -497,7 +546,7 @@ export function createMoney(d) {
         const a = $('m-amt');
         if (a && !a.value && S().settings.salaryAmount) a.value = S().settings.salaryAmount;
       }
-      if (g === 'kind') { $('bill-extra').innerHTML = billExtra(); $('b-dayrow').hidden = v === 'owed'; }
+      if (g === 'kind') { $('bill-extra').innerHTML = billExtra(); $('b-dayrow').hidden = v === 'owed' || v === 'plan'; $('b-amtrow').hidden = v === 'plan'; }
       if (g === 'sipOn') $('sip-box').hidden = v !== 'yes';
     },
     newPerson: async (el) => {
@@ -566,6 +615,7 @@ export function createMoney(d) {
       let name = $('b-name').value.trim();
       if (!name && (md.kind === 'family' || md.kind === 'owed')) name = md.bperson;
       if (!name) return ui.alert('Give this bill a name');
+      if (md.kind === 'plan') return savePlan(name);
       if (!(amount > 0)) return ui.alert('Enter the amount');
       const date = md.kind === 'owed' ? ($('b-date') || {}).value : '';
       if (md.kind === 'owed' && !date) return ui.alert('Pick the date you have to pay on');
@@ -600,7 +650,13 @@ export function createMoney(d) {
       closeModal();
       await refresh();
     },
-    payBill: (el) => payForm(S().commitments.find((c) => c.id === el.dataset.id)),
+    payBill: (el) => payForm(S().commitments.find((c) => c.id === el.dataset.id), el.dataset.inst || ''),
+    instAdd: () => {
+      const last = md.insts[md.insts.length - 1];
+      md.insts.push({ date: '', amount: last ? last.amount : '' });
+      $('inst-list').innerHTML = instRows();
+    },
+    instDel: (el) => { md.insts.splice(Number(el.dataset.i), 1); $('inst-list').innerHTML = instRows(); },
     confirmPay: async () => {
       const c = S().commitments.find((x) => x.id === md.id);
       const amount = Number($('m-amt').value);
@@ -616,7 +672,7 @@ export function createMoney(d) {
     allFilter: (el) => { allFilter = el.dataset.v; d.render(); },
     unpay: async (el) => {
       const c = S().commitments.find((x) => x.id === el.dataset.id);
-      const key = c && M.payKey(c, today().slice(0, 7));
+      const key = el.dataset.inst || (c && M.payKey(c, today().slice(0, 7)));
       const id = c && (c.paid || {})[key];
       if (!id) return;
       S().transactions = S().transactions.filter((t) => t.id !== id);

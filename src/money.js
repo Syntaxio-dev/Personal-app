@@ -64,7 +64,7 @@ export function weekStats(S, t = today()) {
 // ---------- bills (monthly commitments) ----------
 export const dueDate = (c, m) => `${m}-${pad(Math.min(c.dueDay, lastDay(m)))}`;
 // one-time debts (kind 'owed') have a full dueDate and never appear in the monthly list
-export const billActive = (c, m) => c.kind !== 'owed' && c.active !== false && m >= (c.startMonth || '0000-00') && (!c.endMonth || m <= c.endMonth);
+export const billActive = (c, m) => c.kind !== 'owed' && c.kind !== 'plan' && c.active !== false && m >= (c.startMonth || '0000-00') && (!c.endMonth || m <= c.endMonth);
 // the key under which a payment is remembered in commitment.paid
 export const payKey = (c, m) => (c.kind === 'owed' ? 'once' : m);
 
@@ -92,6 +92,12 @@ export function paidDateOf(S, c, key) {
 export const isRecent = (b, t = today()) => !b.paid || !b.paidAt || b.paidAt >= addDays(t, -7);
 
 export function emiStats(c) {
+  if (c.kind === 'plan') {
+    const insts = c.inst || [];
+    const paidIn = insts.filter((i) => (c.paid || {})[i.id]).length;
+    const before = Number(c.paidBefore) || 0;
+    return { paid: before + paidIn, total: before + insts.length, left: insts.length - paidIn, done: insts.length > 0 && paidIn === insts.length };
+  }
   const inApp = Object.keys(c.paid || {}).filter((k) => MONTH_KEY.test(k)).length;
   const paid = (Number(c.paidBefore) || 0) + inApp;
   let total = Number(c.total) || 0;
@@ -99,12 +105,15 @@ export function emiStats(c) {
   return { paid, total, left: total ? Math.max(0, total - paid) : null, done: !!total && paid >= total };
 }
 
+// what the whole plan costs: a plan has its own amount for every installment
+export const emiTotal = (c) => (c.kind === 'plan' ? (c.inst || []).reduce((n, i) => n + (Number(i.amount) || 0), 0) : (Number(c.amount) || 0) * (emiStats(c).total || 0));
+
 export function lastPaidDate(S, c) {
   return Object.keys(c.paid || {}).map((k) => paidDateOf(S, c, k)).filter(Boolean).sort().pop() || '';
 }
 
 export function completedEmis(S) {
-  return S.commitments.filter((c) => c.kind === 'loan' && emiStats(c).done)
+  return S.commitments.filter((c) => (c.kind === 'loan' || c.kind === 'plan') && emiStats(c).done)
     .map((c) => ({ c, stats: emiStats(c), doneOn: lastPaidDate(S, c) }))
     .sort((a, b) => b.doneOn.localeCompare(a.doneOn));
 }
@@ -120,6 +129,21 @@ export function paymentHistory(S) {
     out.push({ id: e.id, date: e.date, name: inv.name, kind: 'sip', person: '', amount: e.amount });
   }));
   return out.sort((a, b) => b.date.localeCompare(a.date));
+}
+
+// Everything that has to be paid on one specific date: one-time debts and the installments of a plan with set dates.
+// commitment.inst = [{ id, date, amount }]; a payment is remembered under commitment.paid[inst.id]
+export function datedFor(S, t = today()) {
+  const out = owedFor(S, t).map((b) => ({ ...b, key: 'once', amount: Number(b.c.amount) || 0 }));
+  S.commitments.filter((c) => c.kind === 'plan').forEach((c) => {
+    const insts = [...(c.inst || [])].sort((a, b) => a.date.localeCompare(b.date));
+    const before = Number(c.paidBefore) || 0;
+    insts.forEach((it, i) => {
+      const paid = !!(c.paid || {})[it.id];
+      out.push({ c, inst: it, key: it.id, due: it.date, amount: Number(it.amount) || 0, paid, paidAt: paid ? paidDateOf(S, c, it.id) : '', late: !paid && it.date < t ? daysBetween(it.date, t) : 0, n: before + i + 1, total: before + insts.length });
+    });
+  });
+  return out.sort((a, b) => Number(a.paid) - Number(b.paid) || a.due.localeCompare(b.due));
 }
 
 // money borrowed from a person or an app that must be returned on one specific date, no installments
@@ -174,8 +198,8 @@ export function safeToSpend(S, t = today()) {
   const added = salaryAdded(S, m0);
   const target = salaryDate(S, added ? m1 : m0);
   const due = [m0, m1].flatMap((m) => billsFor(S, m, t).filter((b) => !b.paid && (b.due <= target || b.due < t)));
-  const owed = owedFor(S, t).filter((b) => !b.paid && (b.due <= target || b.due < t));
-  const bills = sum(due, (b) => Number(b.c.amount) || 0) + sum(owed, (b) => Number(b.c.amount) || 0);
+  const dated = datedFor(S, t).filter((b) => !b.paid && (b.due <= target || b.due < t));
+  const bills = sum(due, (b) => Number(b.c.amount) || 0) + sum(dated, (b) => b.amount);
   const w = wallet(S);
   const days = target > t ? daysBetween(t, target) : 0;
   return { wallet: w, bills, safe: w - bills, target, days, perDay: days > 0 ? Math.max(0, w - bills) / days : null, salaryLate: !added && target <= t };
