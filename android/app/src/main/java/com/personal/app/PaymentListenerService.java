@@ -317,6 +317,7 @@ public class PaymentListenerService extends NotificationListenerService {
         String amt = (amount == Math.floor(amount)) ? String.valueOf((long) amount) : String.valueOf(amount);
         Notification out = new NotificationCompat.Builder(ctx, CHANNEL)
                 .setSmallIcon(R.drawable.ic_stat_prysm)
+                .setLargeIcon(Brand.logo(ctx))
                 .setColor(0xFF7C3AED)
                 .setContentTitle("Add expense? \u20B9" + amt)
                 .setContentText(payee.isEmpty() ? "Tap to categorise this payment" : "Paid to " + payee + " \u2013 tap to categorise")

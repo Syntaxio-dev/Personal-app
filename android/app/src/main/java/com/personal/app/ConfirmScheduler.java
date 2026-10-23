@@ -146,6 +146,7 @@ final class ConfirmScheduler {
         PendingIntent pi = PendingIntent.getActivity(c, 4301, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         Notification n = new NotificationCompat.Builder(c, CHANNEL)
                 .setSmallIcon(R.drawable.ic_stat_prysm)
+                .setLargeIcon(Brand.logo(c))
                 .setColor(0xFF7C3AED)
                 .setContentTitle(item.optString("title", "Reminder"))
                 .setContentText(item.optString("body", ""))

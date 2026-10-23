@@ -22,7 +22,7 @@ import * as G from './goals.js';
 import { createGoals } from './goalsui.js';
 import { createScreen } from './screenui.js';
 import { pad, dateStr, today, addDays, daysBetween, dayName, dayLabel, fmtTime } from './dates.js';
-import { syncNotifications, initNotifications, planTime, exactAlarmsAllowed, openExactAlarmSettings, NAG_SLOTS, setNativePlan, setSyncHook } from './notify.js';
+import { syncNotifications, initNotifications, planTime, exactAlarmsAllowed, openExactAlarmSettings, NAG_SLOTS, setNativePlan, setSyncHook, testReminder } from './notify.js';
 
 const CATEGORIES = ['Food', 'Groceries', 'Petrol', 'Vehicle', 'Travel', 'Bills', 'Rent', 'Shopping', 'Health', 'Fun', 'Family', 'Friends', 'Loan EMI', 'Repayment', 'Other'];
 const STATUS = { P: 'Present', A: 'Absent', H: 'Half-day', L: 'Leave', O: 'Holiday' };
@@ -498,6 +498,12 @@ const views = {
           <div class="grid2" style="margin-top:10px"><button class="btn alt" data-act="capAppSettings">App settings</button><button class="btn alt" data-act="capLog">Capture log</button></div>
           <div class="muted" style="margin-top:12px;line-height:1.5">If "Expense now" works but the other tests do not, your phone is freezing Prysm in the background. On iQOO / Vivo open App settings and allow <b>Display pop-up windows</b>, <b>Display pop-up windows while running in the background</b> and <b>Autostart</b>, and set Battery to <b>No restrictions</b>.</div></div>`
       : `<div class="card"><h2>Payment capture</h2><div class="sec">Available in the installed Android app.</div></div>`;
+    const logoCard = native || window.__screenPlugin
+      ? `<div class="card"><h2>Notification logo</h2>
+          <div class="sec" style="line-height:1.55">Every Prysm notification carries the Prysm logo. If the notification bar still shows an old logo, your phone has saved the old app icon. Send a test to see what a brand new notification looks like.</div>
+          <div class="grid2" style="margin-top:14px"><button class="btn" data-act="logoTest">Send test</button><button class="btn alt" data-act="notifSettings">Notification settings</button></div>
+          <div class="muted" style="margin-top:12px;line-height:1.6">Still the old logo? In this order: 1) swipe away the old Prysm notifications, 2) restart the phone, 3) change your icon style or theme once and change it back, 4) last: export a backup below, uninstall Prysm (switch off device admin first if you turned it on), install the APK, then Import.</div></div>`
+      : '';
     return `
       <div class="card"><h2>Profile</h2><span class="label">Your name</span><input id="s-name" value="${esc(st.name)}" placeholder="What should Prysm call you?" maxlength="30" autocomplete="off" style="margin-bottom:0"></div>
       <div class="card"><h2>Dashboard</h2>
@@ -534,6 +540,7 @@ const views = {
         <input id="s-attstart" type="date" value="${att.trackStart(db.get())}" max="${today()}">
         <div class="muted" style="margin-top:-2px">Days before this date are ignored. Unmarked days after it count as absent.</div></div>
       ${capture_}
+      ${logoCard}
       <div class="card"><h2>Backup</h2>
         <div class="grid2"><button class="btn" data-act="export">Export</button><button class="btn alt" data-act="import">Import</button></div>
         <div class="muted" style="margin-top:10px">Your data lives only on this phone. Export a backup now and then.</div></div>
@@ -1104,6 +1111,16 @@ const actions = {
       await ui.alert('The test popup appears in 2 seconds. Switch to PhonePe or your home screen to see it show over that app.', 'Test started');
     } catch (e) { toast(e.message || 'Could not start the test'); }
   },
+  logoTest: async () => {
+    const phone = window.__screenPlugin || PaymentCapture;
+    if (Capacitor.isNativePlatform() && !(await ensureNotifPermission('Prysm needs notification permission to show the test.'))) return;
+    try {
+      await phone.testNotification();
+      if (Capacitor.isNativePlatform()) await testReminder();
+      await ui.alert('Two test notifications are on the way. Pull down the notification bar and look at the logo on each.', 'Test sent');
+    } catch (e) { toast(e.message || 'Could not show the test'); }
+  },
+  notifSettings: async () => { try { await (window.__screenPlugin || PaymentCapture).openNotificationSettings(); } catch (e) { toast('Could not open settings'); } },
   capLog: async () => {
     let items = [];
     try { items = (await PaymentCapture.getLog()).items || []; } catch (e) { /* plugin missing */ }
@@ -1257,6 +1274,7 @@ db.init().then(async () => {
     setNativePlan(true);
     setSyncHook(pushPlan);
     PaymentCapture.setKeepAlive({ on: db.get().settings.keepAlive !== false }).catch(() => {});
+    PaymentCapture.clearStale({ tag: pkg.version }).catch(() => {});
   }
   await ensureAttStart();
   await initNotifications();

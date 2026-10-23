@@ -137,6 +137,7 @@ final class PlanScheduler {
         String name = prefs(c).getString("name", "");
         Notification n = new NotificationCompat.Builder(c, CHANNEL)
                 .setSmallIcon(R.drawable.ic_stat_prysm)
+                .setLargeIcon(Brand.logo(c))
                 .setColor(0xFF7C3AED)
                 .setContentTitle("Plan tomorrow")
                 .setContentText((name.isEmpty() ? "What" : name + ", what") + "'s on for tomorrow? Tap to plan it.")

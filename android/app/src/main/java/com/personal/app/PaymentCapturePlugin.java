@@ -215,6 +215,78 @@ public class PaymentCapturePlugin extends Plugin {
         call.resolve();
     }
 
+    // ---------- the logo in notifications ----------
+    /**
+     * A notification that was posted by an older version keeps the app info it was posted with, and phones also remember the
+     * app icon they saw first. Clearing what is still showing once per version makes every notification a fresh one.
+     */
+    @PluginMethod
+    public void clearStale(PluginCall call) {
+        try {
+            Context ctx = getContext();
+            String tag = call.getString("tag", "");
+            android.content.SharedPreferences p = ctx.getSharedPreferences("prysm_misc", Context.MODE_PRIVATE);
+            boolean done = tag.isEmpty() || tag.equals(p.getString("notifPurged", ""));
+            if (!done) {
+                android.app.NotificationManager nm = (android.app.NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+                if (nm != null) nm.cancelAll();
+                p.edit().putString("notifPurged", tag).apply();
+            }
+            JSObject r = new JSObject();
+            r.put("cleared", !done);
+            call.resolve(r);
+        } catch (Exception e) {
+            call.reject("Could not clear old notifications", e);
+        }
+    }
+
+    /** A brand new notification (new channel, new id) with Prysm's own small and large icon, to see what the phone shows. */
+    @PluginMethod
+    public void testNotification(PluginCall call) {
+        try {
+            Context ctx = getContext();
+            android.app.NotificationManager nm = (android.app.NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm == null) {
+                call.reject("Notifications are not available");
+                return;
+            }
+            if (Build.VERSION.SDK_INT >= 26) {
+                nm.createNotificationChannel(new android.app.NotificationChannel("prysm_logo_test", "Logo test", android.app.NotificationManager.IMPORTANCE_DEFAULT));
+            }
+            Intent open = new Intent(ctx, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            android.app.PendingIntent pi = android.app.PendingIntent.getActivity(ctx, 4999, open, android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT);
+            String text = "This is a brand new notification. The Prysm hexagon should show here and in the status bar.";
+            android.app.Notification n = new androidx.core.app.NotificationCompat.Builder(ctx, "prysm_logo_test")
+                    .setSmallIcon(R.drawable.ic_stat_prysm)
+                    .setLargeIcon(Brand.logo(ctx))
+                    .setColor(0xFF7C3AED)
+                    .setContentTitle("Prysm logo test")
+                    .setContentText(text)
+                    .setStyle(new androidx.core.app.NotificationCompat.BigTextStyle().bigText(text))
+                    .setPriority(androidx.core.app.NotificationCompat.PRIORITY_DEFAULT)
+                    .setAutoCancel(true)
+                    .setContentIntent(pi)
+                    .build();
+            nm.notify(4999, n);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("Could not show the test notification", e);
+        }
+    }
+
+    /** The phone's own notification settings page for Prysm. */
+    @PluginMethod
+    public void openNotificationSettings(PluginCall call) {
+        try {
+            Intent i = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, getContext().getPackageName());
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(i);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("Could not open the notification settings", e);
+        }
+    }
+
     // ---------- screen time ----------
     @PluginMethod
     public void screenStatus(PluginCall call) {

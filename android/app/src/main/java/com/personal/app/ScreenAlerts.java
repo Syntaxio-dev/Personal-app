@@ -33,6 +33,7 @@ final class ScreenAlerts {
             PendingIntent pi = PendingIntent.getActivity(c, id, target, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
             Notification n = new NotificationCompat.Builder(c, CHANNEL)
                     .setSmallIcon(R.drawable.ic_stat_prysm)
+                    .setLargeIcon(Brand.logo(c))
                     .setColor(0xFF7C3AED)
                     .setContentTitle(title)
                     .setContentText(text)

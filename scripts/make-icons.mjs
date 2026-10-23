@@ -84,6 +84,8 @@ for (const [d, px] of Object.entries({ mdpi: 24, hdpi: 36, xhdpi: 48, xxhdpi: 72
 
 // web: favicon and the logo shown inside the app
 jobs.push(write(join(root, 'public', 'favicon.png'), await sharp(await onBlack(192, 192, 1)).composite([{ input: mask(192, 'square'), blend: 'dest-in' }]).png().toBuffer()));
+// the logo every notification carries as its large icon (the same image as the favicon)
+jobs.push(write(join(RES, 'drawable-nodpi', 'prysm_notif.png'), await sharp(await onBlack(192, 192, 1)).composite([{ input: mask(192, 'square'), blend: 'dest-in' }]).png().toBuffer()));
 jobs.push(write(join(root, 'src', 'assets', 'logo.png'), await sharp(await onBlack(256, 256, 1)).composite([{ input: mask(256, 'square'), blend: 'dest-in' }]).png().toBuffer()));
 
 await Promise.all(jobs);

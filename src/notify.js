@@ -5,6 +5,7 @@ import { addDays, today } from './dates.js';
 import { billActive, datedFor, dueDate, lentLeft, salaryAdded, salaryDate, shiftMonth } from './money.js';
 
 const CHANNEL = 'prysm';
+const LOGO = 'prysm_notif'; // drawable-nodpi/prysm_notif.png, the Prysm logo (see scripts/make-icons.mjs)
 
 // On the phone the nightly planner is a native popup (see PlanScheduler.java); main.js turns this on and
 // hands over a hook that sends the plan time and tomorrow's tasks to the native side on every sync.
@@ -177,6 +178,14 @@ export async function syncNotifications() {
       }
     }
 
-    if (list.length) await LocalNotifications.schedule({ notifications: list });
+    // every reminder carries the Prysm logo as its large icon (phones keep showing an old app icon they saved earlier)
+    if (list.length) await LocalNotifications.schedule({ notifications: list.map((n) => ({ ...n, largeIcon: LOGO })) });
   } catch (e) { /* scheduling is best-effort; the next sync retries */ }
+}
+
+// A reminder a few seconds from now, to see what a fresh Prysm notification looks like on this phone.
+export async function testReminder() {
+  if (!Capacitor.isNativePlatform()) return false;
+  await LocalNotifications.schedule({ notifications: [{ id: 4998, channelId: CHANNEL, title: 'Prysm reminder test', body: 'A reminder looks like this. The Prysm logo should show on it.', largeIcon: LOGO, schedule: { at: new Date(Date.now() + 4000), allowWhileIdle: true } }] });
+  return true;
 }
