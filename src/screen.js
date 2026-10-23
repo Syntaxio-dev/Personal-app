@@ -3,11 +3,14 @@ import { addDays, dateStr, today } from './dates.js';
 // Screen time rules (pure, no DOM)
 //  - state.screen.days[YYYY-MM-DD] = { t: minutes, p: pickups, h: [24 minutes], a: { packageName: minutes } }
 //  - state.screen.names[packageName] = app label
-//  - state.limits = [{ id, name, pkgs[], min (0 = none), night: null | { from, to }, on, created, lockUntil }]
+//    A day may also carry sl: [bedtime, wake-up, minutes] (minutes of the day), the night that ended on it (an estimate).
+//  - state.limits = [{ id, name, pkgs[], min (0 = none), night: null | { from, to }, taper: null | { step, floor, from }, on, created, lockUntil }]
 //  - state.sleepLock = null | { on, from, to, cats[], extra[], message, created, lockUntil }
-//  The phone owns the limits and the sleep lock (see ScreenRules.java): a limit is a promise, locked for a number of days,
-//  and it can only be made stricter. mergeConfig() below is the same rule in JS, used to preview a change and, in a desktop
-//  browser where there is no phone, to apply it. state.limits and state.sleepLock only mirror what the phone kept.
+//  - state.focus = { active: null | { start, until, label, cats[], extra[] }, log: [{ s, e, m, l }] }
+//  The phone owns the limits, the sleep lock and the focus session (see ScreenRules.java): a limit is a promise, locked for
+//  a number of days, and it can only be made stricter; a focus session can only be extended, never ended early. mergeConfig()
+//  below is the same rule in JS, used to preview a change and, in a desktop browser where there is no phone, to apply it.
+//  state.limits, state.sleepLock and state.focus only mirror what the phone kept.
 //  Android only remembers a few days of usage, so every day seen is copied here and kept for KEEP_DAYS.
 
 export const KEEP_DAYS = 120;
@@ -68,11 +71,15 @@ export const usedFor = (S, limit, d) => {
   return day ? limit.pkgs.reduce((a, p) => a + (day.a[p] || 0), 0) : 0;
 };
 
+// the minutes a limit allows on day d: its minutes, less the weekly taper (see effectiveMin); today uses the clock right now
+export const minOn = (limit, d = today()) => effectiveMin(limit, d === today() ? Date.now() : new Date(`${d}T23:59:59`).getTime());
+
 // today's used time comes from the phone (it also counts what Android's numbers miss); other days from the stored days
 export function limitState(S, limit, d = today()) {
   const used = d === today() && typeof limit.used === 'number' ? Math.max(limit.used, usedFor(S, limit, d)) : usedFor(S, limit, d);
-  const pct = limit.min > 0 ? Math.min(100, Math.round((used / limit.min) * 100)) : 0;
-  return { used, pct, over: limit.min > 0 && used >= limit.min, left: Math.max(0, limit.min - used) };
+  const min = minOn(limit, d);
+  const pct = min > 0 ? Math.min(100, Math.round((used / min) * 100)) : 0;
+  return { used, min, pct, over: min > 0 && used >= min, left: Math.max(0, min - used) };
 }
 
 export const limitFor = (S, pkg) => S.limits.find((l) => l.pkgs.includes(pkg));
@@ -97,10 +104,42 @@ export const clampDays = (d) => { const n = Math.floor(Number(d) || 0); return n
 // locked = the promise is still running and the first 10 minutes (to fix a mistake) are over
 export const isLocked = (it, now = Date.now()) => !!it && (it.lockUntil || 0) > now && now - (it.created || 0) > GRACE;
 export const daysLeft = (it, now = Date.now()) => Math.max(0, Math.ceil(((it.lockUntil || 0) - now) / DAY));
-export const anyLocked = (S, now = Date.now()) => S.limits.some((l) => isLocked(l, now)) || isLocked(S.sleepLock, now);
+export const focusRunning = (f, now = Date.now()) => !!f && (f.until || 0) > now;
+export const anyLocked = (S, now = Date.now()) => S.limits.some((l) => isLocked(l, now)) || isLocked(S.sleepLock, now) || focusRunning(S.focus && S.focus.active, now);
 
 const cleanNight = (n) => (n && minutesOf(n.from) >= 0 && minutesOf(n.to) >= 0 && n.from !== n.to ? { from: n.from, to: n.to } : null);
 const uniq = (a, ok) => [...new Set((Array.isArray(a) ? a : []).map(String).filter(ok))];
+
+// ---------- the weekly taper of a limit ----------
+export const WEEK = 7 * DAY;
+
+// step = minutes less each week (1 to 120), floor = where it stops (5 up to just under the limit)
+function cleanTaper(t, min) {
+  if (!t || typeof t !== 'object' || min <= 5) return null;
+  const step = Math.floor(Number(t.step) || 0), floor = Math.floor(Number(t.floor) || 0);
+  if (step < 1 || step > 120 || floor < 5 || floor >= min) return null;
+  return { step, floor };
+}
+const taperAt = (t, from) => (t ? { step: t.step, floor: t.floor, from } : null);
+
+// the daily minutes that count at `now`: the limit's minutes, less the taper's step for every full week since it began, never below the floor
+export function effectiveMin(limit, now = Date.now()) {
+  const min = limit.min || 0, t = limit.taper;
+  if (min <= 0 || !t) return min;
+  const step = t.step || 0, floor = t.floor || 0, from = t.from || 0;
+  if (step <= 0 || floor <= 0 || from <= 0) return min;
+  const weeks = Math.max(0, Math.floor((now - from) / WEEK));
+  return Math.min(min, Math.max(floor, min - weeks * step));
+}
+
+// when the limit reaches its floor (a date), or null when there is no taper or it is already there
+export function taperEnd(limit, now = Date.now()) {
+  const t = limit.taper;
+  if (!t || !(limit.min > 0) || !(t.from > 0)) return null;
+  const weeks = Math.ceil((limit.min - t.floor) / t.step);
+  const at = t.from + weeks * WEEK;
+  return at > now ? at : null;
+}
 
 function cleanLimit(x) {
   if (!x || typeof x !== 'object') return null;
@@ -110,7 +149,44 @@ function cleanLimit(x) {
   const min = Math.max(0, Math.min(1440, Math.round(Number(x.min) || 0)));
   const night = cleanNight(x.night);
   if (!pkgs.length || (!min && !night)) return null;
-  return { id, name: String(x.name || '').trim().slice(0, 40), pkgs, min, night, on: x.on !== false, lockDays: Math.max(0, Math.floor(Number(x.lockDays) || 0)) };
+  return { id, name: String(x.name || '').trim().slice(0, 40), pkgs, min, night, taper: cleanTaper(x.taper, min), on: x.on !== false, lockDays: Math.max(0, Math.floor(Number(x.lockDays) || 0)) };
+}
+
+// ---------- focus sessions ----------
+export const FOCUS_MIN = 10;
+export const FOCUS_MAX = 240;
+export const FOCUS_OOPS = 60000; // a wrong tap can be undone for one minute, nothing else ends a session early
+
+function cleanFocus(x) {
+  if (!x || typeof x !== 'object') return null;
+  const minutes = Math.floor(Number(x.minutes) || 0);
+  if (minutes <= 0) return null;
+  const cats = uniq(x.cats, (c) => MEDIA.some(([k]) => k === c));
+  const extra = uniq(x.extra, (p) => PKG.test(p));
+  if (!cats.length && !extra.length) return null;
+  return { minutes: Math.max(FOCUS_MIN, Math.min(FOCUS_MAX, minutes)), label: String(x.label || '').trim().slice(0, 40), cats, extra };
+}
+
+function mergeFocus(old, inc, now) {
+  const ms = inc.minutes * 60000;
+  if (!old) return { start: now, until: now + ms, label: inc.label, cats: inc.cats, extra: inc.extra };
+  return {
+    start: old.start || now,
+    until: Math.min(Math.max(old.until || 0, now + ms), now + FOCUS_MAX * 60000),
+    label: inc.label || old.label || '',
+    cats: union(old.cats || [], inc.cats),
+    extra: union(old.extra || [], inc.extra),
+  };
+}
+
+// a session that has run out: moves it from `active` to the log (the phone does the same natively); returns it, or null
+export function settleFocus(S, now = Date.now()) {
+  const f = S.focus && S.focus.active;
+  if (!f || f.until > now) return null;
+  const e = { s: f.start, e: f.until, m: Math.round((f.until - f.start) / 60000), l: f.label || '' };
+  S.focus.log = [...S.focus.log, e].slice(-300);
+  S.focus.active = null;
+  return e;
 }
 
 function cleanSleep(x) {
@@ -128,12 +204,13 @@ const union = (a, b) => [...new Set([...a, ...b])];
 const lockUntilOf = (old, inc, now) => Math.max(inc.lockDays > 0 ? now + clampDays(inc.lockDays) * DAY : 0, old ? old.lockUntil || 0 : 0);
 
 function mergeLimit(old, inc, now, refused) {
-  if (!old) return { id: inc.id, name: inc.name, pkgs: inc.pkgs, min: inc.min, night: inc.night, on: true, created: now, lockUntil: now + clampDays(inc.lockDays) * DAY };
+  if (!old) return { id: inc.id, name: inc.name, pkgs: inc.pkgs, min: inc.min, night: inc.night, taper: taperAt(inc.taper, now), on: true, created: now, lockUntil: now + clampDays(inc.lockDays) * DAY };
   const out = { id: inc.id, created: old.created || now };
   if (!isLocked(old, now)) {
     // not locked (a minute-old mistake, or the promise has run out): anything goes
     const relock = inc.lockDays > 0;
-    return { ...out, name: inc.name, pkgs: inc.pkgs, min: inc.min, night: inc.night, on: relock || inc.on, lockUntil: relock ? now + clampDays(inc.lockDays) * DAY : old.lockUntil || 0 };
+    const same = inc.taper && old.taper && inc.taper.step === old.taper.step && inc.taper.floor === old.taper.floor;
+    return { ...out, name: inc.name, pkgs: inc.pkgs, min: inc.min, night: inc.night, taper: taperAt(inc.taper, same ? old.taper.from || now : now), on: relock || inc.on, lockUntil: relock ? now + clampDays(inc.lockDays) * DAY : old.lockUntil || 0 };
   }
   // locked: only stricter changes get through
   let min = old.min;
@@ -144,7 +221,13 @@ function mergeLimit(old, inc, now, refused) {
   if (!old.night) night = inc.night; else if (inc.night && coversTimes(inc.night, old.night)) night = inc.night;
   if (old.night && night !== inc.night) refused.n++;
   if (old.on && !inc.on) refused.n++;
-  return { ...out, name: inc.name, pkgs: union(old.pkgs, inc.pkgs), min, night, on: old.on || inc.on, lockUntil: lockUntilOf(old, inc, now) };
+  // a weekly taper can be added or made stricter (bigger step, lower floor), never removed or relaxed
+  let taper = taperAt(old.taper, old.taper ? old.taper.from || now : now);
+  if (!old.taper) { if (inc.taper) taper = taperAt(inc.taper, now); }
+  else if (!inc.taper) refused.n++;
+  else if (inc.taper.step >= old.taper.step && inc.taper.floor <= old.taper.floor) taper = taperAt(inc.taper, old.taper.from || now);
+  else refused.n++;
+  return { ...out, name: inc.name, pkgs: union(old.pkgs, inc.pkgs), min, night, taper, on: old.on || inc.on, lockUntil: lockUntilOf(old, inc, now) };
 }
 
 function mergeSleep(old, inc, now, refused) {
@@ -162,7 +245,7 @@ function mergeSleep(old, inc, now, refused) {
   return { ...out, on: old.on || inc.on, from: wider ? inc.from : old.from, to: wider ? inc.to : old.to, cats: union(old.cats, inc.cats), extra: union(old.extra, inc.extra), message: inc.message, lockUntil: lockUntilOf(old, inc, now) };
 }
 
-// committed: { limits, sleep } as the phone holds it; incoming: the change asked for. Returns { limits, sleep, motto, refused }.
+// committed: { limits, sleep, focus } as the phone holds it; incoming: the change asked for. Returns { limits, sleep, focus, motto, refused }.
 export function mergeConfig(committed, incoming, now = Date.now()) {
   const cur = committed || {}, req = incoming || {};
   const refused = { n: 0 };
@@ -192,11 +275,32 @@ export function mergeConfig(committed, incoming, now = Date.now()) {
       if (oldSleep && isLocked(oldSleep, now)) { sleep = oldSleep; refused.n++; } else sleep = null;
     } else sleep = mergeSleep(oldSleep, inc, now, refused);
   }
-  return { limits: result, sleep, motto: String(req.motto !== undefined ? req.motto : cur.motto || '').trim().slice(0, 140), refused: refused.n };
+
+  // a focus session: it can be started, extended and given more groups, but never ended early
+  // (one 60 second window is left to undo a wrong tap)
+  const oldFocus = focusRunning(cur.focus, now) ? cur.focus : null;
+  let focus = oldFocus;
+  if (req.focus !== undefined) {
+    if (req.focus === null) {
+      if (oldFocus) { if (now - (oldFocus.start || 0) <= FOCUS_OOPS) focus = null; else refused.n++; }
+    } else {
+      const inc = cleanFocus(req.focus);
+      if (inc) focus = mergeFocus(oldFocus, inc, now);
+    }
+  }
+  return { limits: result, sleep, focus, motto: String(req.motto !== undefined ? req.motto : cur.motto || '').trim().slice(0, 140), refused: refused.n };
 }
 
 // ---------- storing what Android reports ----------
-// native: [{ start, total, pickups, hours[24], apps{pkg: minutes} }], names: {pkg: label}
+// [bedtime, wake-up, minutes slept] as minutes of the day; null when it is not a believable night (3 to 16 hours)
+export function cleanSl(x) {
+  if (!Array.isArray(x) || x.length < 3) return null;
+  const [bed, wake, m] = x.map((v) => Math.round(Number(v)));
+  if (![bed, wake, m].every(Number.isFinite) || bed < 0 || bed > 1439 || wake < 0 || wake > 1439 || m < 180 || m > 960) return null;
+  return [bed, wake, m];
+}
+
+// native: [{ start, total, pickups, hours[24], apps{pkg: minutes}, sleep: [bed, wake, minutes] }], names: {pkg: label}
 export function merge(S, native, names) {
   const t = today();
   Object.entries(names || {}).forEach(([p, n]) => { if (n) S.screen.names[p] = String(n); });
@@ -207,10 +311,73 @@ export function merge(S, native, names) {
     const r1 = (v) => Math.round(Number(v) * 10) / 10;
     const apps = {};
     Object.entries(nd.apps || {}).forEach(([p, m]) => { if (m >= 0.5) apps[p] = r1(m); });
-    S.screen.days[d] = { t: r1(nd.total), p: Number(nd.pickups) || 0, h: Array.from({ length: 24 }, (_, i) => r1((nd.hours || [])[i] || 0)), a: apps };
+    const day = { t: r1(nd.total), p: Number(nd.pickups) || 0, h: Array.from({ length: 24 }, (_, i) => r1((nd.hours || [])[i] || 0)), a: apps };
+    const sl = cleanSl(nd.sleep);
+    // a night worked out earlier stays when a later read has no estimate (Android forgets old events)
+    if (sl) day.sl = sl; else if (S.screen.days[d] && S.screen.days[d].sl) day.sl = S.screen.days[d].sl;
+    S.screen.days[d] = day;
   });
   const cutoff = addDays(t, -KEEP_DAYS);
   Object.keys(S.screen.days).forEach((d) => { if (d < cutoff) delete S.screen.days[d]; });
+}
+
+// ---------- focus log ----------
+const focusDate = (e) => dateStr(new Date(e.s));
+
+// minutes of finished focus sessions on each of the given dates
+export const focusByDay = (S, dates) => dates.map((d) => S.focus.log.reduce((a, e) => a + (focusDate(e) === d ? e.m : 0), 0));
+
+// today and the last 7 days (today included): minutes and number of sessions
+export function focusStats(S, now = Date.now()) {
+  const t = today(), week = lastDates(7, t);
+  const mins = focusByDay(S, week);
+  const running = S.focus.active && focusRunning(S.focus.active, now) ? S.focus.active : null;
+  const sessions = S.focus.log.filter((e) => week.includes(focusDate(e))).length;
+  return { today: mins[mins.length - 1], week: mins.reduce((a, b) => a + b, 0), sessions, running };
+}
+
+// ---------- streaks ----------
+// full days in a row, up to yesterday, with the limit kept (used within what it allowed that day).
+// A day with no usage data stops the count: nobody can say how it went. Days before the limit existed do not count.
+export function limitStreak(S, limit, upTo = today()) {
+  if (!limit || !(limit.min > 0) || limit.on === false) return 0;
+  const first = limit.created ? dateStr(new Date(limit.created)) : '';
+  let n = 0;
+  for (let d = addDays(upTo, -1); d >= first; d = addDays(d, -1)) {
+    const day = S.screen.days[d];
+    if (!day || !(day.t > 0) || usedFor(S, limit, d) > minOn(limit, d)) break;
+    n++;
+    if (n >= 3650) break;
+  }
+  return n;
+}
+
+export const STREAK_MARKS = [100, 60, 30, 14, 7];
+// the biggest milestone a streak has reached (0 when none yet)
+export const streakMilestone = (n) => STREAK_MARKS.find((m) => n >= m) || 0;
+
+// ---------- sleep (an estimate from the longest quiet stretch of the night) ----------
+// "11:30 PM" from minutes of the day
+export function fmtClock(min) {
+  const m = ((Math.round(min) % 1440) + 1440) % 1440, h = Math.floor(m / 60);
+  return `${h % 12 || 12}:${String(m % 60).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+// bedtimes after noon count as the evening before and the small hours as the same night, so 23:30 and 00:30 are an hour apart
+const nightOf = (bed) => (bed < 720 ? bed + 1440 : bed);
+const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+
+// nights: { date, bed, wake, min }[] in date order; avg* are null without nights; steady = bedtime spread in minutes
+export function sleepStats(S, dates) {
+  const nights = dates.filter((d) => S.screen.days[d] && S.screen.days[d].sl).map((d) => {
+    const [bed, wake, min] = S.screen.days[d].sl;
+    return { date: d, bed, wake, min };
+  });
+  if (!nights.length) return { nights, avgMin: 0, avgBed: null, avgWake: null, spread: 0 };
+  const beds = nights.map((n) => nightOf(n.bed)), wakes = nights.map((n) => n.wake);
+  const mb = mean(beds);
+  const spread = Math.round(Math.sqrt(mean(beds.map((b) => (b - mb) ** 2))));
+  return { nights, avgMin: Math.round(mean(nights.map((n) => n.min))), avgBed: Math.round(mb) % 1440, avgWake: Math.round(mean(wakes)), spread };
 }
 
 // ---------- insights ----------
@@ -276,9 +443,22 @@ export function insights(S, kind) {
   S.limits.filter((l) => l.on && l.min > 0).forEach((l) => {
     const days = lastDates(7, addDays(t, -1)).filter((d) => S.screen.days[d] && S.screen.days[d].t > 0);
     if (days.length < 3) return;
-    const ok = days.filter((d) => usedFor(S, l, d) <= l.min).length;
-    push(ok === days.length ? 'good' : ok >= days.length / 2 ? 'info' : 'warn', `${limitName(S, l)}: ${ok} of ${days.length} days within the limit`, ok === days.length ? 'You kept to it every day. That is the habit forming.' : `Over ${fmt(l.min)} on ${days.length - ok} day${days.length - ok === 1 ? '' : 's'}. A smaller limit or a night window can help.`);
+    const ok = days.filter((d) => usedFor(S, l, d) <= minOn(l, d)).length;
+    push(ok === days.length ? 'good' : ok >= days.length / 2 ? 'info' : 'warn', `${limitName(S, l)}: ${ok} of ${days.length} days within the limit`, ok === days.length ? 'You kept to it every day. That is the habit forming.' : `Over ${fmt(minOn(l))} on ${days.length - ok} day${days.length - ok === 1 ? '' : 's'}. A smaller limit or a night window can help.`);
   });
 
-  return out.slice(0, 7);
+  // sleep: short nights, and what a late night does to the next day
+  const sl = sleepStats(S, lastDates(14, t));
+  if (sl.nights.length >= 4) {
+    if (sl.avgMin < 360) push('warn', `About ${fmt(sl.avgMin)} of sleep`, 'That is a short night on average (an estimate from when your screen stayed off). Most adults need 7 to 9 hours.');
+    const late = sl.nights.filter((n) => nightOf(n.bed) >= 1470), early = sl.nights.filter((n) => nightOf(n.bed) < 1470);
+    const next = (list) => list.filter((n) => totalOn(S, n.date) > 0).map((n) => totalOn(S, n.date));
+    const lt = next(late), et = next(early);
+    if (lt.length >= 2 && et.length >= 2) {
+      const diff = Math.round(mean(lt) - mean(et));
+      if (diff >= 20) push('warn', 'Late nights cost you', `${fmt(diff)} more screen time the day after a night past 12:30 AM (${fmt(mean(lt))} against ${fmt(mean(et))}).`);
+    }
+  }
+
+  return out.slice(0, 8);
 }

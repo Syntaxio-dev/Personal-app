@@ -17,6 +17,7 @@ final class ScreenAlerts {
     static final String CHANNEL = "prysm_guard";
     static final int ID_BLOCKING = 4400;
     static final int ID_ADMIN = 4401;
+    static final int ID_FOCUS = 4402;
 
     private ScreenAlerts() {}
 
@@ -45,6 +46,33 @@ final class ScreenAlerts {
             nm.notify(id, n);
         } catch (Exception ignored) {
             // an alert that cannot be shown is not worth a crash
+        }
+    }
+
+    /** A plain, dismissable note (not an alarm): for good news such as a finished focus session. */
+    static void note(Context ctx, int id, String title, String text) {
+        try {
+            Context c = ctx.getApplicationContext();
+            if (Build.VERSION.SDK_INT >= 33 && c.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return;
+            NotificationManager nm = (NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm == null) return;
+            if (Build.VERSION.SDK_INT >= 26) {
+                nm.createNotificationChannel(new NotificationChannel("prysm_focus", "Focus sessions", NotificationManager.IMPORTANCE_DEFAULT));
+            }
+            Intent open = new Intent(c, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra("prysm_open", "screen");
+            PendingIntent pi = PendingIntent.getActivity(c, id, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+            Notification n = new NotificationCompat.Builder(c, "prysm_focus")
+                    .setSmallIcon(R.drawable.ic_stat_prysm)
+                    .setLargeIcon(Brand.logo(c))
+                    .setColor(0xFF7C3AED)
+                    .setContentTitle(title)
+                    .setContentText(text)
+                    .setAutoCancel(true)
+                    .setContentIntent(pi)
+                    .build();
+            nm.notify(id, n);
+        } catch (Exception ignored) {
+            // a note that cannot be shown is not worth a crash
         }
     }
 

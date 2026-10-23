@@ -62,6 +62,8 @@ export function createMoney(d) {
 
   function overview() {
     const s = S(), ym = getYm();
+    const hidden = !!s.settings.hideBalance;
+    const amt = (n) => (hidden ? '••••' : inr(n));
     const m = M.monthStats(s, ym);
     const sp = M.safeToSpend(s);
     const short = new Date(`${ym}-01T00:00`).toLocaleDateString('en-IN', { month: 'short' });
@@ -79,16 +81,16 @@ export function createMoney(d) {
     const sources = Object.entries(m.bySource);
     const people = Object.entries(m.byPerson).sort((a, b) => b[1] - a[1]);
     const rows = [...m.tx].sort((a, b) => b.date.localeCompare(a.date)).map((t) => `
-      <div class="item tap" data-act="editTx" data-id="${t.id}">${dot(t.type === 'income' ? '#4ade80' : '#f87171')}
+      <div class="item tap swipe" data-act="editTx" data-id="${t.id}">${dot(t.type === 'income' ? '#4ade80' : '#f87171')}
         <div class="grow"><div>${esc(t.category)}${t.person ? ` <span class="ptag">${esc(t.person)}</span>` : ''}${t.mode === 'cash' ? ' <span class="ptag">Cash</span>' : ''}${t.note ? ' · ' + esc(t.note) : ''}</div><div class="muted">${dayName(t.date)}</div></div>
         <b class="${t.type === 'income' ? 'good' : 'bad'}">${t.type === 'income' ? '+' : '-'}${inr(t.amount)}</b>
         <button class="icon" data-act="delTx" data-id="${t.id}" aria-label="Delete">${svg('trash')}</button></div>`).join('') || '<div class="muted">No entries this month.</div>';
 
     return `${monthPicker()}
-      <div class="hero"><div class="label">Wallet balance</div><div class="num" data-count="${sp.wallet}">${inr(sp.wallet)}</div><hr>
-        <div class="grid2"><div><div class="label">In · ${short}</div><div class="val" style="color:#fff">${inr(m.income)}</div></div>
-        <div><div class="label">Out · ${short}</div><div class="val" style="color:#fff">${inr(m.expense)}</div></div></div></div>
-      <div class="card safe"><div class="label">Safe to spend</div><div class="num ${sp.safe < 0 ? 'bad' : ''}" style="margin:6px 0">${inr(sp.safe)}</div>
+      <div class="hero"><button class="icon eye" data-act="toggleBalance" aria-label="${hidden ? 'Show' : 'Hide'} balance">${svg(hidden ? 'eyeoff' : 'eye')}</button><div class="label">Wallet balance</div><div class="num" ${hidden ? '' : `data-count="${sp.wallet}"`}>${amt(sp.wallet)}</div><hr>
+        <div class="grid2"><div><div class="label">In · ${short}</div><div class="val" style="color:#fff">${amt(m.income)}</div></div>
+        <div><div class="label">Out · ${short}</div><div class="val" style="color:#fff">${amt(m.expense)}</div></div></div></div>
+      <div class="card safe"><div class="label">Safe to spend</div><div class="num ${sp.safe < 0 && !hidden ? 'bad' : ''}" style="margin:6px 0">${amt(sp.safe)}</div>
         <div class="sec">${note}</div><div class="muted" style="margin-top:6px">After ${inr(sp.bills)} of bills still to pay</div></div>
       <div class="grid2 top-actions"><button class="btn" data-act="addIncome">+ Income</button><button class="btn alt" data-act="addExpense">+ Expense</button></div>
       ${sources.length ? `<div class="card"><h2>Income this month</h2>${sources.map(([k, v]) => `<div class="row between" style="padding:6px 0"><span>${esc(k)}</span><b class="good">+${inr(v)}</b></div>`).join('')}</div>` : ''}
@@ -586,10 +588,28 @@ export function createMoney(d) {
       await budgetAlert(data.category, data.date);
     },
     delTx: async (el) => {
-      if (!(await ui.confirm('This entry will be removed.', { title: 'Delete entry', ok: 'Delete', danger: true }))) return;
-      S().transactions = S().transactions.filter((t) => t.id !== el.dataset.id);
-      unlinkPaid(el.dataset.id);
+      const id = el.dataset.id;
+      const i = S().transactions.findIndex((t) => t.id === id);
+      if (i < 0) return;
+      // remember which bills this entry had paid, so Undo can mark them paid again
+      const links = [];
+      S().commitments.forEach((c) => Object.keys(c.paid || {}).forEach((k) => { if (c.paid[k] === id) links.push({ cid: c.id, k, on: c.paidOn ? c.paidOn[k] : undefined }); }));
+      const [item] = S().transactions.splice(i, 1);
+      unlinkPaid(id);
+      ui.buzz('warn');
       await refresh();
+      ui.undo('Entry deleted', async () => {
+        const list = S().transactions;
+        list.splice(Math.min(i, list.length), 0, item);
+        links.forEach((l) => {
+          const c = S().commitments.find((x) => x.id === l.cid);
+          if (!c) return;
+          c.paid = c.paid || {};
+          c.paid[l.k] = id;
+          if (l.on !== undefined) { c.paidOn = c.paidOn || {}; c.paidOn[l.k] = l.on; }
+        });
+        await refresh();
+      });
     },
     setBudget: () => {
       const b = S().budgets;
@@ -645,10 +665,18 @@ export function createMoney(d) {
       await refresh();
     },
     delBill: async () => {
-      if (!(await ui.confirm('Past payments stay in your entries.', { title: 'Delete this bill?', ok: 'Delete', danger: true }))) return;
-      S().commitments = S().commitments.filter((c) => c.id !== md.id);
+      const i = S().commitments.findIndex((c) => c.id === md.id);
+      if (i < 0) return;
+      const [item] = S().commitments.splice(i, 1);
       closeModal();
+      ui.buzz('warn');
       await refresh();
+      // past payments stay in your entries, and the bill comes back with its whole payment record
+      ui.undo('Bill deleted', async () => {
+        const list = S().commitments;
+        list.splice(Math.min(i, list.length), 0, item);
+        await refresh();
+      });
     },
     payBill: (el) => payForm(S().commitments.find((c) => c.id === el.dataset.id), el.dataset.inst || ''),
     instAdd: () => {
@@ -664,6 +692,7 @@ export function createMoney(d) {
       const date = $('m-date').value || today();
       if (c.kind === 'sip' && !S().investments.find((i) => i.id === c.investmentId)) return ui.alert('The linked investment was deleted. Edit this bill and pick another.');
       settleBill(c, amount, date, md.key || md.ym);
+      ui.buzz('ok');
       closeModal();
       await refresh();
     },
@@ -784,10 +813,18 @@ export function createMoney(d) {
       await commit(); investSheet(i.id);
     },
     invDelete: async (el) => {
-      if (!(await ui.confirm('The money goes back to your wallet.', { title: 'Delete investment?', ok: 'Delete', danger: true }))) return;
-      S().investments = S().investments.filter((i) => i.id !== el.dataset.id);
+      const i = S().investments.findIndex((x) => x.id === el.dataset.id);
+      if (i < 0) return;
+      const [item] = S().investments.splice(i, 1);
       closeModal();
+      ui.buzz('warn');
       await commit();
+      // the money goes back to the wallet (it is worked out from the records), and Undo takes it out again
+      ui.undo('Investment deleted', async () => {
+        const list = S().investments;
+        list.splice(Math.min(i, list.length), 0, item);
+        await commit();
+      });
     },
 
     addLend: lendForm,
@@ -809,9 +846,16 @@ export function createMoney(d) {
       await refresh();
     },
     delLend: async (el) => {
-      if (!(await ui.confirm('This record will be removed and your wallet is adjusted.', { title: 'Delete record?', ok: 'Delete', danger: true }))) return;
-      S().lent = S().lent.filter((l) => l.id !== el.dataset.id);
+      const i = S().lent.findIndex((l) => l.id === el.dataset.id);
+      if (i < 0) return;
+      const [item] = S().lent.splice(i, 1);
+      ui.buzz('warn');
       await refresh();
+      ui.undo('Record deleted', async () => {
+        const list = S().lent;
+        list.splice(Math.min(i, list.length), 0, item);
+        await refresh();
+      });
     },
 
     openWeekly,

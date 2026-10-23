@@ -423,10 +423,18 @@ export function createGoals(d) {
       await refresh();
     },
     gDelete: async (el) => {
-      if (!(await ui.confirm('Its progress log goes with it.', { title: 'Delete this goal?', ok: 'Delete', danger: true }))) return;
-      S().goals = S().goals.filter((g) => g.id !== el.dataset.id);
+      const i = S().goals.findIndex((g) => g.id === el.dataset.id);
+      if (i < 0) return;
+      const [item] = S().goals.splice(i, 1);
       closeModal();
+      ui.buzz('warn');
       await refresh();
+      // the goal comes back with its whole progress log
+      ui.undo('Goal deleted', async () => {
+        const list = S().goals;
+        list.splice(Math.min(i, list.length), 0, item);
+        await refresh();
+      });
     },
     gDone: (el) => { const g = goal(el.dataset.id); return g && !G.progressOf(g) ? addProgress(g.id, 1) : null; },
     gUndo: async (el) => { const g = goal(el.dataset.id); if (g) { g.progress = []; await commit(); if (document.querySelector('#modal [data-sheet="goal"]')) goalSheet(g.id); } },

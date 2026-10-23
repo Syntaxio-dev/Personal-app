@@ -54,6 +54,8 @@ const ICON = {
   clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   lock: '<rect x="5" y="11" width="14" height="9" rx="2.5"/><path d="M8 11V8a4 4 0 018 0v3"/>',
+  eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>',
+  eyeoff: '<path d="M4 4l16 16M9.9 5.8A9.7 9.7 0 0112 5.5c6 0 9.5 6.5 9.5 6.5a16 16 0 01-3 3.7M6.4 7.6A16 16 0 002.5 12S6 18.5 12 18.5c1.6 0 3-.4 4.2-1M9.9 9.9a2.8 2.8 0 003.9 3.9"/>',
   up: '<path d="M6 14l6-6 6 6"/>',
   down: '<path d="M6 10l6 6 6-6"/>',
 };
@@ -164,6 +166,38 @@ const ui = {
 };
 const toast = (msg) => ui.alert(msg);
 
+// Haptics: a short, quiet buzz through the phone's own haptic engine (needs no permission). Off on the web and when
+// switched off in Settings.
+let lastBuzz = 0;
+function buzz(kind = 'tick') {
+  const onPhone = Capacitor.isNativePlatform() || !!window.__screenPlugin;
+  if (!onPhone || db.get().settings.haptics === false) return;
+  const now = Date.now();
+  if (now - lastBuzz < 70) return;
+  lastBuzz = now;
+  // a missing buzz must never break the action that asked for it (an older APK has no haptic method)
+  try {
+    const p = (window.__screenPlugin || PaymentCapture).haptic({ kind });
+    if (p && p.catch) p.catch(() => {});
+  } catch (e) { /* no buzz */ }
+}
+ui.buzz = buzz;
+
+// "Deleted. Undo": the delete happens at once and Undo puts it back, a calmer way than asking "Are you sure?" every time.
+let undoTimer = 0;
+let undoFn = null;
+// With no restore function it is just a short note (good news, like a streak), without the Undo button.
+function undoToast(message, restore) {
+  const el = $('toast');
+  clearTimeout(undoTimer);
+  undoFn = restore || null;
+  el.innerHTML = `<div class="bar"><span>${esc(message)}</span>${restore ? '<button data-act="undoNow">Undo</button>' : ''}</div>`;
+  showLayer(el);
+  undoTimer = setTimeout(() => { undoFn = null; hideLayer(el); }, restore ? 5500 : 4200);
+}
+ui.undo = undoToast;
+ui.note = (message) => undoToast(message, null);
+
 async function ensureExactAlarms() {
   if (await exactAlarmsAllowed()) return;
   const go = await ui.confirm('Android needs one more switch so reminders fire exactly on time. Turn on "Alarms & reminders" for Prysm.', { title: 'Exact reminders', ok: 'Open settings' });
@@ -219,6 +253,28 @@ function dueBanner() {
   return n ? `<div class="card dcard attn"><div class="dhead"><h2>Waiting for your answer</h2><span class="bad">${n}</span></div><div class="muted" style="margin-bottom:14px">Your goals need an honest answer before you move on.</div><button class="btn sm" data-act="rvOpen">Answer now</button></div>` : '';
 }
 
+// a calm nudge when the data has not been exported for a week (it lives only on this phone)
+function backupNudge() {
+  const S = db.get(), st = S.settings;
+  if (!st.backupOn) return '';
+  if (S.transactions.length + S.todos.length + S.goals.length + S.commitments.length + S.investments.length < 4) return '';
+  const days = st.lastBackup ? Math.floor((Date.now() - st.lastBackup) / 86400000) : Infinity;
+  if (days < 7) return '';
+  return `<div class="card dcard"><div class="dhead"><h2>Back up your data</h2></div><div class="muted" style="margin-bottom:14px;line-height:1.5">${st.lastBackup ? `Your last backup was ${days} days ago.` : 'You have never made a backup.'} Everything lives only on this phone.</div><button class="btn sm" data-act="openSettings">Open backup</button></div>`;
+}
+
+// a dot on a tab when it needs you
+function tabBadges() {
+  const S = db.get(), t = today(), out = {};
+  out.todo = S.todos.some((x) => !x.done && x.date < t);
+  out.goals = G.dueGoals(S).length + G.overdueDreams(S).length > 0;
+  out.money = [...money.billsFor(S, t.slice(0, 7), t), ...money.datedFor(S, t)].some((b) => !b.paid && (b.late > 0 || b.due <= addDays(t, 1)));
+  out.home = S.inbox.length > 0;
+  const c = att.attCtx(S);
+  out.att = new Date().getHours() >= 10 && att.dayKind(c, t) === 'T' && !c.off.has(new Date().getDay());
+  return out;
+}
+
 function captureBanner() {
   const S = db.get();
   const waiting = S.inbox.length;
@@ -269,6 +325,7 @@ async function syncPayments() {
   } catch (e) { /* older native build */ }
   let openPlan = false;
   let launch = '';
+  let shared = '';
   try {
     const planned = await PaymentCapture.takePlanned();
     const S = db.get();
@@ -279,16 +336,19 @@ async function syncPayments() {
     if (planned.items && planned.items.length) { await db.save(); syncNotifications(); }
     openPlan = !!planned.openPlan;
     launch = planned.launch || '';
+    shared = planned.shared || '';
   } catch (e) { /* older native build */ }
   render();
-  if (launch && launch !== 'plan' && $('modal').hidden) runLaunch(launch);
+  if (launch && launch !== 'plan' && $('modal').hidden) runLaunch(launch, shared);
   else if (openPlan && $('modal').hidden) showPlan();
   else if (db.get().inbox.length && $('modal').hidden) showInboxItem();
   else moneyUi.askSips();
 }
 
 // a home screen widget button or notification asked Prysm to open straight into something
-function runLaunch(what) {
+function runLaunch(what, extra = '') {
+  if (what === 'screen') { actions.goScreen(); return; }
+  if (what === 'shared') { go('todo'); addTodoForm({ title: extra }); return; }
   if (what === 'expense') { go('money'); moneyUi.setTab('overview'); moneyUi.actions.addExpense(); } else if (what === 'income') { go('money'); moneyUi.setTab('overview'); moneyUi.actions.addIncome(); } else if (what === 'task') { go('todo'); addTodoForm(); } else if (what === 'attendance') { go('att'); markDayForm(today()); } else if (what.startsWith('tab:')) go(what.slice(4));
 }
 
@@ -315,7 +375,7 @@ function widgetData() {
   const days = Array.from({ length: 14 }, (_, i) => att.dayKind(c, addDays(t, i - 13)));
   const sp = money.safeToSpend(S);
   return {
-    wallet: inr(sp.wallet),
+    wallet: S.settings.hideBalance ? '••••' : inr(sp.wallet),
     att: { pct: month.pct === null ? '—' : month.pct + '%', sub: `This month${streak ? ' · ' + streak + '-day streak' : ''}`, today: marked ? STATUS[S.attendance[t].s] : 'not marked', days },
     tasks: { left: left.length, items: left.slice(0, 3).map((x) => x.title) },
   };
@@ -337,8 +397,8 @@ function showInboxItem() {
 function dashWidget(id) {
   const S = db.get(), t = today();
   if (id === 'wallet') {
-    const sp = money.safeToSpend(S);
-    return `<div class="hero" data-act="goto" data-tab="money"><div class="label">Wallet balance</div><div class="num" data-count="${sp.wallet}">${inr(sp.wallet)}</div><div class="sub">Safe to spend ${inr(sp.safe)}</div></div>`;
+    const sp = money.safeToSpend(S), hide = !!S.settings.hideBalance;
+    return `<div class="hero" data-act="goto" data-tab="money"><button class="icon eye" data-act="toggleBalance" aria-label="${hide ? 'Show' : 'Hide'} balance">${svg(hide ? 'eyeoff' : 'eye')}</button><div class="label">Wallet balance</div><div class="num" ${hide ? '' : `data-count="${sp.wallet}"`}>${hide ? '••••' : inr(sp.wallet)}</div><div class="sub">Safe to spend ${hide ? '••••' : inr(sp.safe)}</div></div>`;
   }
   if (id === 'quick') {
     return `<div class="quick"><button data-act="addExpense">${svg('expense')}<span>Expense</span></button><button data-act="addIncome">${svg('income')}<span>Income</span></button><button data-act="addTodo">${svg('plus')}<span>Task</span></button></div>`;
@@ -407,6 +467,7 @@ const goalsUi = createGoals({
 const screenUi = createScreen({
   ui, openModal, closeModal, commit, render: (a) => render(a), esc, svg, plugin: window.__screenPlugin || PaymentCapture, isNative: !!window.__screenPlugin || Capacitor.isNativePlatform(),
   pickTime: (o) => pickTime(o), fmtTime, toast, attKind: (day) => att.dayKind(att.attCtx(db.get()), day),
+  syncNotifications: () => syncNotifications(),
 });
 
 // ---------- views ----------
@@ -416,7 +477,7 @@ const views = {
     const widgets = st.dashOrder.filter((id) => !st.dashHidden.includes(id)).map(dashWidget).join('');
     const hour = new Date().getHours();
     const hello = hour < 5 ? 'Good night' : hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-    return `<div class="greet">${hello}${st.name ? ', ' + esc(st.name) : ''}</div>${dueBanner()}${captureBanner()}${widgets || '<div class="empty"><b>Your dashboard is empty</b><span>Tap Customize below to choose what you want to see here.</span></div>'}<button class="link center" data-act="dashEdit">Customize dashboard</button>`;
+    return `<div class="greet">${hello}${st.name ? ', ' + esc(st.name) : ''}</div>${dueBanner()}${captureBanner()}${backupNudge()}${widgets || '<div class="empty"><b>Your dashboard is empty</b><span>Tap Customize below to choose what you want to see here.</span></div>'}<button class="link center" data-act="dashEdit">Customize dashboard</button>`;
   },
 
   money() { return moneyUi.view(); },
@@ -527,7 +588,11 @@ const views = {
         ${row('Backup reminder', 'Saturday evening: export your data', 'backupOn')}
         ${row('Goal check-ins', 'Monday kickoff and a Thursday halfway nudge', 'goalCheckOn')}
         ${row('Dream reminders', 'Deadline countdowns and a monthly dream pick', 'dreamOn')}
+        ${row('Sleep lock warning', 'Half an hour before the sleep lock starts', 'windDownOn')}
         <div class="muted" style="margin-top:12px">Goal reviews cannot be switched off. They are the point.</div></div>
+      <div class="card"><h2>Comfort</h2>
+        ${row('Haptic feedback', 'A small buzz when you tick, pay or swipe', 'haptics')}
+        ${row('Hide balance', 'Shows dots instead of your balance until you tap the eye on the wallet', 'hideBalance')}</div>
       <div class="card"><h2>Money</h2>
         <div class="set-row"><div class="grow"><b>Salary day</b><span>You are reminded the day after if it is not added</span></div><button class="capsule set" style="margin:0" data-act="setSalaryDay"><span>${ord(Number(st.salaryDay) || 11)}</span></button></div>
         <div class="set-row"><div class="grow"><b>Expected salary</b><span>Pre-fills the Add salary form</span></div><button class="capsule ${st.salaryAmount ? 'set' : ''}" style="margin:0" data-act="setSalaryAmt"><span>${st.salaryAmount ? inr(st.salaryAmount) : 'Not set'}</span></button></div>
@@ -543,7 +608,7 @@ const views = {
       ${logoCard}
       <div class="card"><h2>Backup</h2>
         <div class="grid2"><button class="btn" data-act="export">Export</button><button class="btn alt" data-act="import">Import</button></div>
-        <div class="muted" style="margin-top:10px">Your data lives only on this phone. Export a backup now and then.</div></div>
+        <div class="muted" style="margin-top:10px">Your data lives only on this phone. Export a backup now and then.<br>${st.lastBackup ? `Last backup: ${Math.floor((Date.now() - st.lastBackup) / 86400000) === 0 ? 'today' : `${Math.floor((Date.now() - st.lastBackup) / 86400000)} days ago`}.` : 'No backup yet.'}</div></div>
       <div class="card about"><h2>About</h2><div class="about-head"><img class="about-logo" src="${logoUrl}" alt="Prysm logo" width="52" height="52"><div><div class="about-name">Prysm <span>v${APP_VERSION}</span></div><div class="sec">App developed by <b>Ayush</b></div></div></div><div class="muted" style="margin-top:14px">Everything stays on your phone. No account, no server.</div></div>`;
   },
 
@@ -700,7 +765,7 @@ function taskCard(x, t) {
     goalTag(x),
     age >= 2 ? `<span class="ptag late">Overdue ${age} days</span>` : age === 1 ? '<span class="ptag warn">Missed yesterday</span>' : '',
   ].join('');
-  return `<div class="task ${age >= 2 ? 'urgent' : age === 1 ? 'missed' : ''}" data-id="${x.id}">
+  return `<div class="task swipe ${age >= 2 ? 'urgent' : age === 1 ? 'missed' : ''}" data-id="${x.id}">
     <button class="check" data-act="toggleTodo" data-id="${x.id}" aria-label="Complete task">${svg('check')}</button>
     <div class="grow"><div class="t-title">${esc(x.title)}</div><div class="t-meta">${tags}</div></div>
     <button class="icon" data-act="delTodo" data-id="${x.id}" aria-label="Delete task">${svg('trash')}</button></div>`;
@@ -912,6 +977,9 @@ async function doExport() {
     a.download = name;
     a.click();
   }
+  db.get().settings.lastBackup = Date.now();
+  await db.save();
+  render();
 }
 function doImport() {
   const inp = document.createElement('input');
@@ -938,6 +1006,7 @@ const actions = {
   setDay: async (el) => {
     const date = el.dataset.date;
     db.get().attendance[date] = { s: el.dataset.s };
+    buzz('ok');
     closeModal(); await commit();
   },
   clearDay: async (el) => { delete db.get().attendance[el.dataset.date]; closeModal(); await commit(); },
@@ -1027,13 +1096,36 @@ const actions = {
       const card = el.closest('.task, .drow');
       if (card && !reduceMotion()) { card.classList.add('leaving'); await new Promise((r) => setTimeout(r, 360)); }
       t.done = true; t.doneAt = Date.now();
+      buzz('ok');
       logGoalStep(t, true);
     } else { t.done = false; t.doneAt = 0; logGoalStep(t, false); }
     await commit(); syncNotifications();
   },
   delTodo: async (el) => {
-    if (!(await ui.confirm('This task will be removed.', { title: 'Delete task', ok: 'Delete', danger: true }))) return;
-    const S = db.get(); S.todos = S.todos.filter((x) => x.id !== el.dataset.id); await commit(); syncNotifications();
+    const S = db.get();
+    const i = S.todos.findIndex((x) => x.id === el.dataset.id);
+    if (i < 0) return;
+    const [item] = S.todos.splice(i, 1);
+    buzz('warn');
+    await commit(); syncNotifications();
+    undoToast('Task deleted', async () => {
+      const list = db.get().todos;
+      list.splice(Math.min(i, list.length), 0, item);
+      await commit(); syncNotifications();
+    });
+  },
+  undoNow: async () => {
+    const f = undoFn;
+    undoFn = null;
+    clearTimeout(undoTimer);
+    hideLayer($('toast'));
+    if (f) { buzz('ok'); await f(); }
+  },
+  toggleBalance: async () => {
+    const st = db.get().settings;
+    st.hideBalance = !st.hideBalance;
+    buzz('tick');
+    await commit();
   },
   planTomorrow: showPlan,
   planGoal: (el) => { draft.goalId = draft.goalId === el.dataset.id ? '' : el.dataset.id; paintDraft(); },
@@ -1084,7 +1176,9 @@ const actions = {
         if (!st[k]) { st[k] = true; await ui.alert('Your limits are locked, so Prysm has to keep running. You can switch this off when the lock ends.', 'Locked'); render(); return; }
       }
     }
-    if (st[k]) await ensureNotifPermission('Prysm needs notification permission to send these reminders.');
+    if (k === 'haptics' && st[k]) buzz('ok');
+    // only the reminder switches need the notification permission
+    if (st[k] && !['haptics', 'hideBalance'].includes(k)) await ensureNotifPermission('Prysm needs notification permission to send these reminders.');
     await commit(); syncNotifications();
   },
   setSleep: async () => {
@@ -1176,7 +1270,7 @@ let touch = null;
 document.addEventListener('touchstart', (e) => {
   const t = e.touches[0];
   const edge = 28;
-  const blocked = !$('modal').hidden || !$('dialog').hidden || (e.target.closest && e.target.closest('input, select, textarea, canvas, .scroll'));
+  const blocked = !$('modal').hidden || !$('dialog').hidden || (e.target.closest && e.target.closest('input, select, textarea, canvas, .scroll, .swipe'));
   touch = blocked || t.clientX < edge || t.clientX > window.innerWidth - edge || e.touches.length > 1 ? null : { x: t.clientX, y: t.clientY, t: Date.now() };
 }, { passive: true });
 document.addEventListener('touchend', (e) => {
@@ -1187,6 +1281,76 @@ document.addEventListener('touchend', (e) => {
   if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.8 || dt > 700) return;
   go(TAB_ORDER[TAB_ORDER.indexOf(tab) + (dx < 0 ? 1 : -1)]);
 }, { passive: true });
+
+// ---------- swipe a row: right = done, left = delete (with undo) ----------
+// A row with class "swipe" follows the finger sideways. Past 35% of its width the action fires by pressing the row's own
+// button (.check for done, a delete button for delete), so swiping and tapping always do exactly the same thing.
+let swipe = null;
+const swipeParts = (row) => ({ right: row.querySelector('.check'), left: row.querySelector('button[data-act^="del"]') });
+document.addEventListener('touchstart', (e) => {
+  const row = e.target.closest && e.target.closest('.swipe');
+  if (!row || e.touches.length > 1 || !$('modal').hidden || !$('dialog').hidden) { swipe = null; return; }
+  const t = e.touches[0];
+  swipe = { row, x: t.clientX, y: t.clientY, dx: 0, live: false, hint: null, past: false, rect: row.getBoundingClientRect() };
+}, { passive: true });
+document.addEventListener('touchmove', (e) => {
+  if (!swipe) return;
+  const t = e.touches[0], dx = t.clientX - swipe.x, dy = t.clientY - swipe.y;
+  const parts = swipeParts(swipe.row);
+  if (!swipe.live) {
+    if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { swipe = null; return; } // it is a scroll
+    if (Math.abs(dx) < 12 || !(dx > 0 ? parts.right : parts.left)) return;
+    swipe.live = true;
+    swipe.row.style.transition = 'none';
+    swipe.row.style.position = 'relative';
+    swipe.row.style.zIndex = '1';
+    const hint = document.createElement('div');
+    hint.className = 'swipe-hint';
+    hint.innerHTML = '<span class="l">Done</span><span class="r">Delete</span>';
+    const r = swipe.rect;
+    Object.assign(hint.style, { top: `${r.top}px`, left: `${r.left}px`, width: `${r.width}px`, height: `${r.height}px` });
+    document.body.appendChild(hint);
+    swipe.hint = hint;
+  }
+  const w = swipe.rect.width;
+  swipe.dx = (dx > 0 ? parts.right : parts.left) ? Math.max(-w, Math.min(w, dx)) : 0;
+  swipe.row.style.transform = `translateX(${swipe.dx}px)`;
+  const p = Math.abs(swipe.dx) / w;
+  swipe.hint.dataset.side = swipe.dx > 0 ? 'right' : swipe.dx < 0 ? 'left' : '';
+  swipe.hint.style.setProperty('--p', String(Math.min(1, p / 0.35)));
+  const past = p >= 0.35;
+  if (past && !swipe.past) buzz('tick');
+  swipe.past = past;
+  swipe.hint.classList.toggle('go', past);
+  if (e.cancelable) e.preventDefault();
+}, { passive: false });
+function finishSwipe() {
+  const s = swipe;
+  swipe = null;
+  if (!s || !s.live) return;
+  const { row, hint } = s;
+  const w = s.rect.width, side = s.dx > 0 ? 'right' : 'left';
+  const instant = reduceMotion();
+  if (!s.past) {
+    row.style.transition = instant ? 'none' : 'transform 260ms var(--ease)';
+    row.style.transform = '';
+    setTimeout(() => { row.style.transition = ''; row.style.zIndex = ''; if (hint) hint.remove(); }, instant ? 0 : 280);
+    return;
+  }
+  row.style.transition = instant ? 'none' : 'transform 180ms ease-in, opacity 180ms ease-in';
+  row.style.transform = `translateX(${side === 'right' ? w : -w}px)`;
+  row.style.opacity = '0';
+  setTimeout(() => {
+    if (hint) hint.remove();
+    const parts = swipeParts(row);
+    const target = side === 'right' ? parts.right : parts.left;
+    if (target) target.click();
+    // if nothing replaced the row (the action did not apply), bring it back
+    setTimeout(() => { if (row.isConnected) { row.style.transition = ''; row.style.transform = ''; row.style.opacity = ''; row.style.zIndex = ''; } }, 700);
+  }, instant ? 0 : 190);
+}
+document.addEventListener('touchend', finishSwipe, { passive: true });
+document.addEventListener('touchcancel', finishSwipe, { passive: true });
 
 // ---------- shell ----------
 // anim: 'up' | 'next' | 'prev' | 'fade' | undefined (no animation, e.g. after ticking a task)
@@ -1203,7 +1367,8 @@ function render(anim) {
     [...view.children].forEach((c, i) => c.style.setProperty('--i', Math.min(i, 7)));
     view.className = 'fx-' + anim;
   }
-  $('tabs').innerHTML = TABS.map(([k, l]) => `<button class="${k === tab ? 'on' : ''}" data-act="goto" data-tab="${k}">${svg(k)}${l}</button>`).join('');
+  const badge = tabBadges();
+  $('tabs').innerHTML = TABS.map(([k, l]) => `<button class="${k === tab ? 'on' : ''}" data-act="goto" data-tab="${k}">${svg(k)}${l}${badge[k] ? '<i class="tb" aria-label="Needs you"></i>' : ''}</button>`).join('');
   charts.forEach((ch) => ch.destroy());
   charts = [];
   if (tab === 'money' && moneyUi.getTab() === 'report') drawMoneyReport();
@@ -1214,8 +1379,9 @@ function render(anim) {
   if (anim) countUp();
 }
 
-// Dev helper (desktop browser only): window.__simulatePayment(250, 'Zomato')
+// Dev helpers (desktop browser only): window.__simulatePayment(250, 'Zomato'), window.__runLaunch('shared', 'text')
 if (!Capacitor.isNativePlatform()) {
+  window.__runLaunch = (what, extra) => runLaunch(what, extra);
   window.__simulatePayment = async (amount, payee = '') => {
     db.get().inbox.push({ amount, payee, category: 'Other', note: payee, date: today(), status: 'review' });
     await db.save(); render(); showInboxItem();
@@ -1232,6 +1398,7 @@ function openFromNotification(extra) {
   else if (extra.type === 'goalReview') { tab = 'goals'; goalsUi.setTab('goals'); render('up'); goalsUi.checkDue({ force: true }); }
   else if (extra.type === 'goalCheck') { tab = 'goals'; goalsUi.setTab('goals'); render('up'); }
   else if (extra.type === 'bucket') { tab = 'goals'; goalsUi.setTab('bucket'); render('up'); }
+  else if (extra.type === 'screen') { tab = 'screen'; window.scrollTo(0, 0); render('up'); screenUi.sync(true).then((changed) => { if (changed && tab === 'screen' && $('modal').hidden) render(); }); }
 }
 
 function listenForNotifications() {

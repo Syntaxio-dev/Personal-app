@@ -338,7 +338,7 @@ public class PrysmAccessibilityService extends AccessibilityService {
         counting = v.countIds;
         if (v.block) {
             String title = v.name.isEmpty() ? ScreenTime.labelOf(this, fgPkg) : v.name;
-            showBlock(v.kind, fgPkg, title, v.text, v.lockUntil, HOME_AFTER, false, host == null);
+            showBlock(v.kind, fgPkg, title, v.text, "focus".equals(v.kind) ? 0 : v.lockUntil, HOME_AFTER, false, host == null);
             return;
         }
         long delay = -1;
@@ -488,6 +488,8 @@ public class PrysmAccessibilityService extends AccessibilityService {
                     s.removeBlock();
                     if ("sleep".equals(kind)) {
                         s.showBlock("sleep", "preview", "Instagram", ScreenTime.config(s).optJSONObject("sleep") == null ? ScreenRules.DEFAULT_MESSAGE : ScreenTime.config(s).optJSONObject("sleep").optString("message", ScreenRules.DEFAULT_MESSAGE), 0, 0, true, false);
+                    } else if ("focus".equals(kind)) {
+                        s.showBlock("focus", "preview", "Instagram", "Focus session: Study. Back in 25 min.", 0, 0, true, false);
                     } else {
                         s.showBlock("limit", "preview", "Instagram", "You used your 30 min for today. It opens again at midnight.", 0, 0, true, false);
                     }
@@ -512,7 +514,7 @@ public class PrysmAccessibilityService extends AccessibilityService {
         int pad = OverlayHost.dp(ui, 28);
         root.setPadding(pad, pad, pad, pad);
 
-        String tagText = "limit".equals(kind) ? "TIME IS UP" : "night".equals(kind) ? "NIGHT MODE" : sleep ? "SLEEP TIME" : "LOCKED";
+        String tagText = "limit".equals(kind) ? "TIME IS UP" : "night".equals(kind) ? "NIGHT MODE" : sleep ? "SLEEP TIME" : "focus".equals(kind) ? "FOCUS SESSION" : "LOCKED";
         TextView tag = OverlayHost.label(ui, tagText);
         tag.setGravity(Gravity.CENTER);
         root.addView(tag);

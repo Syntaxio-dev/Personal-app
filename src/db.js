@@ -1,5 +1,6 @@
 import { Capacitor } from '@capacitor/core';
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
+import { cleanSl, FOCUS_MAX } from './screen.js';
 
 const LS_KEY = 'personal-app-state';
 let conn = null;
@@ -12,7 +13,7 @@ const empty = () => ({
     salary: 0, name: '', sleep: '23:00', planLead: 30, planOn: true, remindOn: true, nagOn: true, askedNotif: false, askedExact: false, weekOff: [0], attStart: '',
     salaryDay: 11, salaryAmount: 0, openingBalance: 0, salaryOn: true, billOn: true, weeklyOn: true, backupOn: true,
     dashOrder: ['wallet', 'quick', 'tasks', 'goals', 'attendance', 'bills', 'bucket', 'screen'], dashHidden: [],
-    goalCheckOn: true, dreamOn: true, dreamPick: null, keepAlive: true,
+    goalCheckOn: true, dreamOn: true, dreamPick: null, keepAlive: true, haptics: true, hideBalance: false, lastBackup: 0, streakSeen: {}, windDownOn: true,
   },
   transactions: [],
   budgets: {},
@@ -29,6 +30,7 @@ const empty = () => ({
   screen: { days: {}, names: {} },
   limits: [],
   sleepLock: null,
+  focus: { active: null, log: [] },
 });
 
 // New fields get defaults here, so data saved by older versions of the app still loads.
@@ -44,6 +46,9 @@ const normalize = (s) => {
   out.screen = { days: {}, names: {}, ...(out.screen && typeof out.screen === 'object' ? out.screen : {}) };
   if (!Array.isArray(out.limits)) out.limits = [];
   if (!out.sleepLock || typeof out.sleepLock !== 'object') out.sleepLock = null;
+  out.focus = { active: null, log: [], ...(out.focus && typeof out.focus === 'object' ? out.focus : {}) };
+  if (!Array.isArray(out.focus.log)) out.focus.log = [];
+  if (!out.settings.streakSeen || typeof out.settings.streakSeen !== 'object') out.settings.streakSeen = {};
   delete out.settings.screenStrict;
   return out;
 };
@@ -123,22 +128,44 @@ function sanitize(s) {
     const apps = {};
     Object.entries(v.a && typeof v.a === 'object' ? v.a : {}).forEach(([p, m]) => { if (/^[\w.]{1,160}$/.test(p) && num(m) > 0) apps[p] = num(m); });
     days[k] = { t: num(v.t), p: num(v.p), h: Array.from({ length: 24 }, (_, i) => num(Array.isArray(v.h) ? v.h[i] : 0)), a: apps };
+    const sl = cleanSl(v.sl);
+    if (sl) days[k].sl = sl;
   });
   const names = {};
   Object.entries(s.screen && s.screen.names && typeof s.screen.names === 'object' ? s.screen.names : {}).forEach(([p, n]) => { if (/^[\w.]{1,160}$/.test(p)) names[p] = str(n).slice(0, 60); });
   s.screen = { days, names };
   const pkgOk = (p) => /^[\w.]{1,160}$/.test(p);
-  s.limits = list(s.limits).map((l) => ({ id: str(l.id), name: str(l.name).slice(0, 40), pkgs: (Array.isArray(l.pkgs) ? l.pkgs : []).map(str).filter(pkgOk), min: Math.max(0, Math.round(num(l.min))), night: l.night && hhmm(l.night.from) && hhmm(l.night.to) ? { from: l.night.from, to: l.night.to } : null, on: l.on !== false, created: num(l.created), lockUntil: num(l.lockUntil) })).filter((l) => l.id && l.pkgs.length);
+  const taperOf = (t, min) => (t && typeof t === 'object' && num(t.step) >= 1 && num(t.step) <= 120 && num(t.floor) >= 5 && num(t.floor) < min && num(t.from) > 0 ? { step: Math.round(num(t.step)), floor: Math.round(num(t.floor)), from: num(t.from) } : null);
+  const limitOf = (l) => {
+    const min = Math.max(0, Math.round(num(l.min)));
+    return { id: str(l.id), name: str(l.name).slice(0, 40), pkgs: (Array.isArray(l.pkgs) ? l.pkgs : []).map(str).filter(pkgOk), min, night: l.night && hhmm(l.night.from) && hhmm(l.night.to) ? { from: l.night.from, to: l.night.to } : null, taper: taperOf(l.taper, min), on: l.on !== false, created: num(l.created), lockUntil: num(l.lockUntil) };
+  };
+  s.limits = list(s.limits).map(limitOf).filter((l) => l.id && l.pkgs.length);
   // the phone keeps the real promises; this copy is only what the screen shows until the phone answers
   const sl = s.sleepLock;
   s.sleepLock = sl && typeof sl === 'object' && hhmm(sl.from) && hhmm(sl.to) ? { on: sl.on !== false, from: sl.from, to: sl.to, cats: (Array.isArray(sl.cats) ? sl.cats : []).map(str).filter((c) => ['social', 'video', 'game', 'music'].includes(c)), extra: (Array.isArray(sl.extra) ? sl.extra : []).map(str).filter(pkgOk), message: str(sl.message).slice(0, 120), created: num(sl.created), lockUntil: num(sl.lockUntil) } : null;
+  // focus: the running session (never longer than the 4 hour cap from now) and the log of finished ones
+  const fo = s.focus && typeof s.focus === 'object' ? s.focus : {};
+  const fa = fo.active && typeof fo.active === 'object' ? fo.active : null;
+  const mediaOk = (c) => ['social', 'video', 'game', 'music'].includes(c);
+  s.focus = {
+    active: fa && num(fa.start) > 0 && num(fa.until) > num(fa.start) && num(fa.until) <= Date.now() + (FOCUS_MAX + 1) * 60000
+      ? { start: num(fa.start), until: num(fa.until), label: str(fa.label).slice(0, 40), cats: (Array.isArray(fa.cats) ? fa.cats : []).map(str).filter(mediaOk), extra: (Array.isArray(fa.extra) ? fa.extra : []).map(str).filter(pkgOk) }
+      : null,
+    log: list(fo.log).filter((e) => num(e.s) > 0 && num(e.m) > 0).map((e) => ({ s: num(e.s), e: num(e.e), m: Math.round(num(e.m)), l: str(e.l).slice(0, 40) })).slice(-300),
+  };
+  const seen = {};
+  Object.entries(s.settings.streakSeen && typeof s.settings.streakSeen === 'object' ? s.settings.streakSeen : {}).forEach(([k, v]) => { if (/^[\w-]{1,64}$/.test(k) && num(v) > 0) seen[k] = Math.round(num(v)); });
+  s.settings.streakSeen = seen;
   const att = {};
   Object.entries(s.attendance && typeof s.attendance === 'object' ? s.attendance : {}).forEach(([k, v]) => { if (day(k) && v && ['P', 'H', 'L', 'O', 'A'].includes(v.s)) att[k] = { s: v.s }; });
   s.attendance = att;
   const budgets = {};
   Object.entries(s.budgets && typeof s.budgets === 'object' ? s.budgets : {}).forEach(([k, v]) => { if (num(v) > 0) budgets[str(k)] = num(v); });
   s.budgets = budgets;
-  ['salary', 'salaryDay', 'salaryAmount', 'openingBalance', 'planLead'].forEach((k) => { s.settings[k] = num(s.settings[k]); });
+  ['salary', 'salaryDay', 'salaryAmount', 'openingBalance', 'planLead', 'lastBackup'].forEach((k) => { s.settings[k] = num(s.settings[k]); });
+  s.settings.haptics = s.settings.haptics !== false;
+  s.settings.hideBalance = !!s.settings.hideBalance;
   if (!s.settings.salaryDay) s.settings.salaryDay = 11;
   if (!s.settings.planLead) s.settings.planLead = 30;
   s.settings.name = str(s.settings.name).slice(0, 30);

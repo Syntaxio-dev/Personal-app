@@ -518,3 +518,40 @@ html, body { max-width: 100%; }
 .chips button[disabled], button.icon[disabled], .switch[disabled] { opacity: 0.3; pointer-events: none; }
 .app-pick .grow small { display: block; font-size: 11px; font-weight: 500; color: var(--t3); margin-top: 1px; }
 .app-pick.held .tick { background: rgba(124,58,237,0.5); }
+
+/* ---------- undo toast, swipe rows, tab badges, eye button (v1.6) ---------- */
+#toast { position: fixed; left: 16px; right: 16px; bottom: calc(78px + env(safe-area-inset-bottom)); z-index: 40; display: flex; justify-content: center; pointer-events: none; }
+#toast[hidden] { display: none; }
+#toast .bar { pointer-events: auto; display: flex; align-items: center; gap: 14px; width: 100%; max-width: 420px; padding: 10px 10px 10px 16px; border-radius: 14px; background: rgba(28,28,28,0.97); border: 1px solid var(--glass-line); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); box-shadow: 0 8px 30px rgba(0,0,0,0.55); animation: toastUp 320ms var(--ease) both; }
+#toast.closing .bar { animation: toastDown 200ms ease-in both; }
+#toast span { flex: 1; font-size: 14px; color: var(--t2); }
+#toast button { border: 0; border-radius: 10px; padding: 9px 16px; background: var(--tint); color: var(--p2); font: 700 13px 'Manrope', sans-serif; }
+@keyframes toastUp { from { transform: translateY(16px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes toastDown { to { transform: translateY(12px); opacity: 0; } }
+
+.swipe { touch-action: pan-y; }
+.swipe-hint { position: fixed; z-index: 0; border-radius: 16px; display: flex; align-items: center; justify-content: space-between; padding: 0 22px; pointer-events: none; font: 800 14px 'Manrope', sans-serif; letter-spacing: 0.3px; opacity: calc(0.25 + var(--p, 0) * 0.75); }
+.swipe-hint span { display: none; }
+.swipe-hint[data-side="right"] { background: rgba(74,222,128,0.2); color: var(--green); }
+.swipe-hint[data-side="right"] .l { display: block; }
+.swipe-hint[data-side="left"] { background: rgba(248,113,113,0.2); color: var(--red); }
+.swipe-hint[data-side="left"] .r { display: block; }
+.swipe-hint.go { filter: brightness(1.25); }
+
+#tabs button .tb { position: absolute; top: 8px; left: calc(50% + 9px); width: 9px; height: 9px; border-radius: 50%; background: var(--red); border: 2px solid #000; box-shadow: 0 0 8px rgba(248,113,113,0.6); }
+@media (min-width: 1100px) { #tabs button .tb { top: 50%; left: auto; right: 14px; transform: translateY(-50%); } }
+
+.hero { position: relative; }
+.hero button.eye { position: absolute; top: 10px; right: 10px; color: var(--p3); }
+
+/* ---------- focus sessions, streaks and the sleep estimate (v1.6) ---------- */
+.fc-run { border-color: rgba(124,58,237,0.35); background: linear-gradient(180deg, rgba(124,58,237,0.14), rgba(255,255,255,0.04)); }
+.fc-time { font: 800 44px 'Manrope', sans-serif; letter-spacing: -1.5px; margin: 14px 0 4px; font-variant-numeric: tabular-nums; }
+.fc-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
+.fc-stats > div { padding: 12px 8px; border-radius: 14px; background: var(--glass); border: 1px solid var(--glass-line); text-align: center; min-width: 0; }
+.fc-stats b { display: block; font: 800 16px 'Manrope', sans-serif; white-space: nowrap; }
+.fc-stats span { display: block; margin-top: 3px; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--t3); }
+.fc-chart { margin-top: 14px; }
+.lim-streak { margin-top: 10px; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--t2); }
+.lim-streak i { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--green); box-shadow: 0 0 8px rgba(74,222,128,0.5); }
+.lim-streak b { color: var(--green); }

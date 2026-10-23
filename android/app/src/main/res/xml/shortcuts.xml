@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="add_expense"
+        android:enabled="true"
+        android:icon="@drawable/prysm_app"
+        android:shortcutShortLabel="@string/shortcut_expense"
+        android:shortcutLongLabel="@string/shortcut_expense_long">
+        <intent
+            android:action="android.intent.action.MAIN"
+            android:targetPackage="com.personal.app"
+            android:targetClass="com.personal.app.MainActivity">
+            <extra android:name="prysm_open" android:value="expense" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="add_task"
+        android:enabled="true"
+        android:icon="@drawable/prysm_app"
+        android:shortcutShortLabel="@string/shortcut_task"
+        android:shortcutLongLabel="@string/shortcut_task_long">
+        <intent
+            android:action="android.intent.action.MAIN"
+            android:targetPackage="com.personal.app"
+            android:targetClass="com.personal.app.MainActivity">
+            <extra android:name="prysm_open" android:value="task" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="mark_attendance"
+        android:enabled="true"
+        android:icon="@drawable/prysm_app"
+        android:shortcutShortLabel="@string/shortcut_attendance"
+        android:shortcutLongLabel="@string/shortcut_attendance_long">
+        <intent
+            android:action="android.intent.action.MAIN"
+            android:targetPackage="com.personal.app"
+            android:targetClass="com.personal.app.MainActivity">
+            <extra android:name="prysm_open" android:value="attendance" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="screen_time"
+        android:enabled="true"
+        android:icon="@drawable/prysm_app"
+        android:shortcutShortLabel="@string/shortcut_screen"
+        android:shortcutLongLabel="@string/shortcut_screen_long">
+        <intent
+            android:action="android.intent.action.MAIN"
+            android:targetPackage="com.personal.app"
+            android:targetClass="com.personal.app.MainActivity">
+            <extra android:name="prysm_open" android:value="screen" />
+        </intent>
+    </shortcut>
+</shortcuts>

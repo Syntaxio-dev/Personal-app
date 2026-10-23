@@ -208,8 +208,10 @@ final class ScreenRules {
         int min = Math.max(0, Math.min(1440, in.optInt("min", 0)));
         JSONObject night = cleanNight(in.optJSONObject("night"));
         if (pkgs.isEmpty() || (min == 0 && night == null)) return null;
+        JSONObject taper = cleanTaper(in.optJSONObject("taper"), min);
         JSONObject o = new JSONObject();
         put(o, "id", id);
+        put(o, "taper", taper == null ? JSONObject.NULL : taper);
         put(o, "name", clip(in.optString("name", ""), 40));
         put(o, "pkgs", arr(pkgs));
         put(o, "min", min);
@@ -281,6 +283,7 @@ final class ScreenRules {
             put(out, "pkgs", inc.optJSONArray("pkgs"));
             put(out, "min", inc.optInt("min"));
             put(out, "night", inc.opt("night") == null ? JSONObject.NULL : inc.opt("night"));
+            put(out, "taper", taperValue(inc.optJSONObject("taper"), now));
             put(out, "on", true);
             put(out, "created", now);
             put(out, "lockUntil", now + clampDays(inc.optInt("lockDays", 0)) * DAY);
@@ -293,6 +296,9 @@ final class ScreenRules {
             put(out, "pkgs", inc.optJSONArray("pkgs"));
             put(out, "min", inc.optInt("min"));
             put(out, "night", inc.opt("night") == null ? JSONObject.NULL : inc.opt("night"));
+            JSONObject it = inc.optJSONObject("taper"), ot0 = old.optJSONObject("taper");
+            boolean sameTaper = it != null && ot0 != null && it.optInt("step") == ot0.optInt("step") && it.optInt("floor") == ot0.optInt("floor");
+            put(out, "taper", taperValue(it, sameTaper ? ot0.optLong("from", now) : now));
             boolean relock = inc.optInt("lockDays", 0) > 0;
             put(out, "on", relock || inc.optBoolean("on", true));
             long until = old.optLong("lockUntil", 0);
@@ -319,6 +325,20 @@ final class ScreenRules {
 
         boolean wasOn = old.optBoolean("on", true);
         if (wasOn && !inc.optBoolean("on", true)) refused[0]++;
+
+        // a weekly taper can be added or made stricter (bigger step, lower floor), never removed or relaxed
+        JSONObject ot = old.optJSONObject("taper"), nt = inc.optJSONObject("taper");
+        Object taper = taperValue(ot, ot == null ? now : ot.optLong("from", now));
+        if (ot == null) {
+            if (nt != null) taper = taperValue(nt, now);
+        } else if (nt == null) {
+            refused[0]++;
+        } else if (nt.optInt("step") >= ot.optInt("step") && nt.optInt("floor") <= ot.optInt("floor")) {
+            taper = taperValue(nt, ot.optLong("from", now));
+        } else {
+            refused[0]++;
+        }
+        put(out, "taper", taper);
 
         put(out, "name", inc.optString("name"));
         put(out, "pkgs", arr(union(op, np)));
@@ -426,12 +446,135 @@ final class ScreenRules {
             } else sleep = null;
         } else sleep = mergeSleep(oldSleep, inSleep, now, refused);
 
+        // a focus session: it can be started, extended and given more groups, but never ended early
+        // (one 60 second window is left to undo a wrong tap)
+        JSONObject oldFocus = focusRunning(cur.optJSONObject("focus"), now) ? cur.optJSONObject("focus") : null;
+        JSONObject focus = oldFocus;
+        if (req.has("focus")) {
+            if (req.isNull("focus")) {
+                if (oldFocus != null) {
+                    if (now - oldFocus.optLong("start", 0) <= FOCUS_OOPS_MS) focus = null;
+                    else refused[0]++;
+                }
+            } else {
+                JSONObject inc = cleanFocus(req.optJSONObject("focus"));
+                if (inc != null) focus = mergeFocus(oldFocus, inc, now);
+            }
+        }
+
         JSONObject out = new JSONObject();
         put(out, "limits", result);
         put(out, "sleep", sleep == null ? JSONObject.NULL : sleep);
+        put(out, "focus", focus == null ? JSONObject.NULL : focus);
         put(out, "motto", clip(req.optString("motto", cur.optString("motto", "")), 140));
         put(out, "refused", refused[0]);
         return out;
+    }
+
+    // ---------- the weekly taper of a limit ----------
+    static final long WEEK = 7 * DAY;
+
+    /** A taper asked for: step = minutes less each week (1 to 120), floor = where it stops (5 up to just under min). */
+    static JSONObject cleanTaper(JSONObject in, int min) {
+        if (in == null || min <= 5) return null;
+        int step = in.optInt("step", 0), floor = in.optInt("floor", 0);
+        if (step < 1 || step > 120 || floor < 5 || floor >= min) return null;
+        return obj("step", step, "floor", floor);
+    }
+
+    private static Object taperValue(JSONObject t, long from) {
+        if (t == null) return JSONObject.NULL;
+        return obj("step", t.optInt("step"), "floor", t.optInt("floor"), "from", from);
+    }
+
+    /** The daily minutes that count today: the limit's minutes, less the taper's step for every full week since it began, never below the floor. */
+    static int effectiveMin(JSONObject limit, long now) {
+        int min = limit.optInt("min", 0);
+        JSONObject t = limit.optJSONObject("taper");
+        if (min <= 0 || t == null) return min;
+        int step = t.optInt("step", 0), floor = t.optInt("floor", 0);
+        long from = t.optLong("from", 0);
+        if (step <= 0 || floor <= 0 || from <= 0) return min;
+        long weeks = Math.max(0, (now - from) / WEEK);
+        long eff = Math.max((long) floor, min - weeks * step);
+        return (int) Math.min((long) min, eff);
+    }
+
+    // ---------- focus sessions ----------
+    static final long FOCUS_MIN_MS = 10 * 60000L;
+    static final long FOCUS_MAX_MS = 240 * 60000L;
+    static final long FOCUS_OOPS_MS = 60000L;
+
+    static boolean focusRunning(JSONObject f, long now) {
+        return f != null && f.optLong("until", 0) > now;
+    }
+
+    /** A focus request from the web side, made safe: { minutes, label, cats[], extra[] }. Null when it cannot be used. */
+    static JSONObject cleanFocus(JSONObject in) {
+        if (in == null) return null;
+        int minutes = in.optInt("minutes", 0);
+        if (minutes <= 0) return null;
+        Set<String> cats = new LinkedHashSet<>();
+        JSONArray ca = in.optJSONArray("cats");
+        if (ca != null) for (int i = 0; i < ca.length(); i++) {
+            String c = ca.optString(i, "");
+            for (String known : CATS) if (known.equals(c)) cats.add(c);
+        }
+        List<String> extra = cleanPkgs(in.optJSONArray("extra"));
+        if (cats.isEmpty() && extra.isEmpty()) return null;
+        JSONObject o = new JSONObject();
+        put(o, "minutes", (int) Math.max(FOCUS_MIN_MS / 60000L, Math.min(FOCUS_MAX_MS / 60000L, minutes)));
+        put(o, "label", clip(in.optString("label", ""), 40));
+        put(o, "cats", arr(new ArrayList<>(cats)));
+        put(o, "extra", arr(extra));
+        return o;
+    }
+
+    private static JSONObject mergeFocus(JSONObject old, JSONObject inc, long now) {
+        long ms = inc.optInt("minutes") * 60000L;
+        JSONObject out = new JSONObject();
+        if (old == null) {
+            put(out, "start", now);
+            put(out, "until", now + ms);
+            put(out, "label", inc.optString("label"));
+            put(out, "cats", inc.optJSONArray("cats"));
+            put(out, "extra", inc.optJSONArray("extra"));
+            return out;
+        }
+        put(out, "start", old.optLong("start", now));
+        put(out, "until", Math.min(Math.max(old.optLong("until", 0), now + ms), now + FOCUS_MAX_MS));
+        String label = inc.optString("label");
+        put(out, "label", label.isEmpty() ? old.optString("label") : label);
+        put(out, "cats", arr(union(catList(old.optJSONArray("cats")), catList(inc.optJSONArray("cats")))));
+        put(out, "extra", arr(union(list(old.optJSONArray("extra")), list(inc.optJSONArray("extra")))));
+        return out;
+    }
+
+    // ---------- sleep estimate ----------
+    /**
+     * The longest stretch with the screen off inside [w0, w1]. times/types are screen events in time order
+     * (16 = screen off, 26 = shut down, 15 = screen on). A stretch still open at the end of the window counts only when
+     * windowOver is true (otherwise the night is still going). Returns { start, end } or null when nothing
+     * reaches minGap.
+     */
+    static long[] longestOff(long[] times, int[] types, int n, long w0, long w1, long minGap, boolean windowOver) {
+        long bestS = 0, bestE = 0, offStart = -1;
+        for (int i = 0; i < n; i++) {
+            long t = times[i];
+            int ty = types[i];
+            if (t < w0) continue;
+            if (t > w1) break;
+            if (ty == 16 || ty == 26) {
+                if (offStart < 0) offStart = t;
+            } else if (ty == 15) {
+                // the first event being "screen on" means the screen was off before it, since the start of the window
+                long s = offStart >= 0 ? offStart : w0;
+                if (t - s > bestE - bestS) { bestS = s; bestE = t; }
+                offStart = -1;
+            }
+        }
+        if (offStart >= 0 && windowOver && w1 - offStart > bestE - bestS) { bestS = offStart; bestE = w1; }
+        return bestE - bestS >= minGap ? new long[]{bestS, bestE} : null;
     }
 
     // ---------- settings pages that could undo a promise ----------
@@ -480,6 +623,7 @@ final class ScreenRules {
         if (config == null) return false;
         JSONArray l = config.optJSONArray("limits");
         if (l != null) for (int i = 0; i < l.length(); i++) if (isLocked(l.optJSONObject(i), now)) return true;
+        if (focusRunning(config.optJSONObject("focus"), now)) return true;
         return isLocked(config.optJSONObject("sleep"), now);
     }
 }

@@ -140,6 +140,9 @@ public class PaymentCapturePlugin extends Plugin {
             String launch = PlanScheduler.prefs(getContext()).getString("launch", "");
             if (!launch.isEmpty()) PlanScheduler.prefs(getContext()).edit().putString("launch", "").apply();
             r.put("launch", launch);
+            String shared = PlanScheduler.prefs(getContext()).getString("shared", "");
+            if (!shared.isEmpty()) PlanScheduler.prefs(getContext()).edit().putString("shared", "").apply();
+            r.put("shared", shared);
             r.put("openPlan", "plan".equals(launch));
             call.resolve(r);
         } catch (Exception e) {
@@ -212,6 +215,32 @@ public class PaymentCapturePlugin extends Plugin {
     @PluginMethod
     public void openAppSettings(PluginCall call) {
         launch(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, true);
+        call.resolve();
+    }
+
+    // ---------- a small buzz ----------
+    /** A short haptic tick through the phone's own engine (no permission; the phone's touch-feedback setting is respected). */
+    @PluginMethod
+    public void haptic(PluginCall call) {
+        final String kind = call.getString("kind", "tick");
+        try {
+            final android.webkit.WebView view = getBridge().getWebView();
+            view.post(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        int type = android.view.HapticFeedbackConstants.VIRTUAL_KEY;
+                        if ("ok".equals(kind)) type = Build.VERSION.SDK_INT >= 30 ? android.view.HapticFeedbackConstants.CONFIRM : android.view.HapticFeedbackConstants.LONG_PRESS;
+                        else if ("warn".equals(kind)) type = Build.VERSION.SDK_INT >= 30 ? android.view.HapticFeedbackConstants.REJECT : android.view.HapticFeedbackConstants.LONG_PRESS;
+                        view.performHapticFeedback(type);
+                    } catch (Exception ignored) {
+                        // no buzz is not a problem
+                    }
+                }
+            });
+        } catch (Exception ignored) {
+            // no buzz is not a problem
+        }
         call.resolve();
     }
 

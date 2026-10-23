@@ -274,6 +274,8 @@ final class ScreenTime {
     /** Is there any website to watch for? A limit on an app that has a website, or a switched-on sleep lock. */
     static boolean domainRules(Context ctx) {
         JSONObject cfg = config(ctx);
+        // a running focus session shuts websites too
+        if (ScreenRules.focusRunning(cfg.optJSONObject("focus"), now(ctx))) return true;
         JSONObject sleep = cfg.optJSONObject("sleep");
         if (sleep != null && sleep.optBoolean("on", true)) return true;
         JSONArray limits = cfg.optJSONArray("limits");
@@ -295,6 +297,8 @@ final class ScreenTime {
         }
         JSONObject sleep = cfg.optJSONObject("sleep");
         if (ScreenRules.isLocked(sleep, now)) end = Math.max(end, sleep.optLong("lockUntil", 0));
+        JSONObject focus = cfg.optJSONObject("focus");
+        if (ScreenRules.focusRunning(focus, now)) end = Math.max(end, focus.optLong("until", 0));
         return end;
     }
 
@@ -302,6 +306,7 @@ final class ScreenTime {
     static JSONObject apply(Context ctx, JSONObject incoming) {
         JSONObject eff;
         int refused;
+        settleFocus(ctx);
         synchronized (ScreenTime.class) {
             long now = now(ctx);
             JSONObject committed = config(ctx);
@@ -318,6 +323,7 @@ final class ScreenTime {
 
     /** The config for the web layer: each item also says whether it is locked and how much time it has used today. */
     static JSONObject decorate(Context ctx, JSONObject cfg, int refused) {
+        settleFocus(ctx);
         JSONObject out = new JSONObject();
         long now = now(ctx);
         try {
@@ -327,9 +333,16 @@ final class ScreenTime {
                 JSONObject l = new JSONObject(src.getJSONObject(i).toString());
                 l.put("locked", ScreenRules.isLocked(l, now));
                 l.put("used", Math.round(usedMs(ctx, l) / 6000.0) / 10.0);
+                l.put("eff", ScreenRules.effectiveMin(l, now));
                 limits.put(l);
             }
             out.put("limits", limits);
+            JSONObject fc = cfg.optJSONObject("focus");
+            out.put("focus", ScreenRules.focusRunning(fc, now) ? fc : JSONObject.NULL);
+            JSONArray fl = new JSONArray(prefs(ctx).getString("focusLog", "[]"));
+            JSONArray recent = new JSONArray();
+            for (int i = Math.max(0, fl.length() - 120); i < fl.length(); i++) recent.put(fl.get(i));
+            out.put("focusLog", recent);
             JSONObject sl = cfg.optJSONObject("sleep");
             if (sl != null) {
                 JSONObject copy = new JSONObject(sl.toString());
@@ -409,6 +422,52 @@ final class ScreenTime {
         int pickups = 0;
         long[] hours = new long[24];
         Map<String, Long> apps = new HashMap<>();
+        int sleepBed = -1;   // bedtime and wake-up as minutes of the day, from the longest quiet stretch of the night
+        int sleepWake = -1;
+        int sleepMin = 0;
+    }
+
+    private static int minuteOfDayLocal(long ms) {
+        Calendar c = Calendar.getInstance();
+        c.setTimeInMillis(ms);
+        return c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE);
+    }
+
+    /**
+     * The night that ended on this day: the longest stretch with the screen off between 20:00 the evening before and noon,
+     * at least 3 hours. It is an estimate (a phone left on a table is not a sleeper), and nothing is stored when no stretch fits.
+     */
+    static void estimateSleep(Context ctx, Day d, long dayStart) {
+        try {
+            long w0 = dayStart - 4 * HOUR, w1 = dayStart + 12 * HOUR, nowMs = System.currentTimeMillis();
+            boolean over = nowMs >= w1;
+            long end = Math.min(w1, nowMs);
+            if (end <= w0) return;
+            UsageStatsManager usm = (UsageStatsManager) ctx.getSystemService(Context.USAGE_STATS_SERVICE);
+            if (usm == null) return;
+            UsageEvents events = usm.queryEvents(w0, end);
+            if (events == null) return;
+            long[] times = new long[2000];
+            int[] types = new int[2000];
+            int n = 0;
+            UsageEvents.Event e = new UsageEvents.Event();
+            while (events.hasNextEvent() && n < times.length) {
+                events.getNextEvent(e);
+                int t = e.getEventType();
+                if (t == 15 || t == 16 || t == 26) {
+                    times[n] = e.getTimeStamp();
+                    types[n] = t;
+                    n++;
+                }
+            }
+            long[] gap = ScreenRules.longestOff(times, types, n, w0, end, 3 * HOUR, over);
+            if (gap == null) return;
+            d.sleepBed = minuteOfDayLocal(gap[0]);
+            d.sleepWake = minuteOfDayLocal(gap[1]);
+            d.sleepMin = (int) ((gap[1] - gap[0]) / 60000L);
+        } catch (Exception ignored) {
+            // no estimate is fine
+        }
     }
 
     private static void add(Day d, String pkg, long from, long to, long dayStart, long dayEnd, PkgFilter only) {
@@ -530,7 +589,7 @@ final class ScreenTime {
     static final class Verdict {
         boolean applies = false;     // some limit or the sleep lock covers this app / website
         boolean block = false;
-        String kind = "";            // limit | night | sleep | guard
+        String kind = "";            // limit | night | sleep | focus | guard
         String limitId = "";
         String name = "";
         String text = "";
@@ -564,6 +623,22 @@ final class ScreenTime {
             }
         }
 
+        // a focus session: the chosen groups are shut until it ends
+        JSONObject focus = cfg.optJSONObject("focus");
+        if (ScreenRules.focusRunning(focus, now)) {
+            boolean has = sleepHasPkg(ctx, focus, pkg) || (host != null && sleepHasHost(focus, host));
+            if (has) {
+                v.applies = true;
+                v.block = true;
+                v.kind = "focus";
+                v.name = host != null ? host : labelOf(ctx, pkg);
+                int left = (int) Math.max(1, (focus.optLong("until", now) - now + 59999L) / 60000L);
+                String label = focus.optString("label", "");
+                v.text = "Focus session" + (label.isEmpty() ? "" : ": " + label) + ". Back in " + left + " min.";
+                return v;
+            }
+        }
+
         JSONArray limits = cfg.optJSONArray("limits");
         if (limits == null) return v;
         for (int i = 0; i < limits.length(); i++) {
@@ -586,7 +661,7 @@ final class ScreenTime {
                     return v;
                 }
             }
-            int min = l.optInt("min", 0);
+            int min = ScreenRules.effectiveMin(l, now);
             if (min > 0) {
                 long used = usedMs(ctx, l);
                 long allowed = min * 60000L;
@@ -645,8 +720,38 @@ final class ScreenTime {
         }
     }
 
+    /** A focus session that has run out: write it to the log, clear it, and say well done. */
+    static synchronized void settleFocus(Context ctx) {
+        try {
+            JSONObject cfg = config(ctx);
+            JSONObject f = cfg.optJSONObject("focus");
+            if (f == null) return;
+            long now = now(ctx);
+            long s = f.optLong("start", 0), u = f.optLong("until", 0);
+            if (u > now) return;
+            JSONArray log = new JSONArray(prefs(ctx).getString("focusLog", "[]"));
+            JSONObject e = new JSONObject();
+            long minutes = Math.round((u - s) / 60000.0);
+            e.put("s", s);
+            e.put("e", u);
+            e.put("m", minutes);
+            e.put("l", f.optString("label", ""));
+            log.put(e);
+            JSONArray cut = new JSONArray();
+            for (int i = Math.max(0, log.length() - 300); i < log.length(); i++) cut.put(log.get(i));
+            JSONObject next = new JSONObject(cfg.toString());
+            next.put("focus", JSONObject.NULL);
+            prefs(ctx).edit().putString("focusLog", cut.toString()).putString("config", next.toString()).apply();
+            String label = f.optString("label", "");
+            ScreenAlerts.note(ctx, ScreenAlerts.ID_FOCUS, "Focus done: " + minutes + " min", label.isEmpty() ? "Well done. Your apps are open again." : label + ". Well done, your apps are open again.");
+        } catch (Exception ignored) {
+            // it is tried again on the next tick
+        }
+    }
+
     /** Runs every minute while the keep-alive service lives: shouts when something that holds a promise up has been switched off. */
     static void watchdog(Context ctx) {
+        settleFocus(ctx);
         if (!guardActive(ctx)) {
             ScreenAlerts.cancel(ctx, ScreenAlerts.ID_BLOCKING);
             ScreenAlerts.cancel(ctx, ScreenAlerts.ID_ADMIN);
@@ -695,6 +800,13 @@ final class ScreenTime {
                 if (!names.has(en.getKey())) names.put(en.getKey(), labelOf(ctx, en.getKey()));
             }
             day.put("apps", apps);
+            if (d.sleepMin > 0) {
+                JSArray sl = new JSArray();
+                sl.put(d.sleepBed);
+                sl.put(d.sleepWake);
+                sl.put(d.sleepMin);
+                day.put("sleep", sl);
+            }
         } catch (Exception ignored) {
             // an empty day is better than a crash
         }
@@ -707,6 +819,7 @@ final class ScreenTime {
      */
     static JSObject dayWithFallback(Context ctx, long start, JSObject names) {
         Day d = compute(ctx, start, null);
+        estimateSleep(ctx, d, start);
         if (d.total > 0) return toJson(ctx, d, names);
         String saved = prefs(ctx).getString("snap_" + start, "");
         if (!saved.isEmpty()) {
@@ -737,6 +850,7 @@ final class ScreenTime {
             if (!hasUsageAccess(ctx)) return;
             long yesterday = startOfToday() - 24 * HOUR;
             Day d = compute(ctx, yesterday, null);
+            estimateSleep(ctx, d, yesterday);
             SharedPreferences.Editor ed = p.edit();
             if (d.total > 0) ed.putString("snap_" + yesterday, toJson(ctx, d, new JSObject()).toString());
             long today = ScreenRules.dayNumber(now(ctx), tzOffset(ctx));

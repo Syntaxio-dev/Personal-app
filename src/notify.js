@@ -1,7 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import * as db from './db.js';
-import { addDays, today } from './dates.js';
+import { addDays, fmtTime, today } from './dates.js';
 import { billActive, datedFor, dueDate, lentLeft, salaryAdded, salaryDate, shiftMonth } from './money.js';
 
 const CHANNEL = 'prysm';
@@ -37,6 +37,14 @@ function nextOccurrence(start, now) {
 export function planTime(st) {
   const [h, m] = (st.sleep || '23:00').split(':').map(Number);
   const mins = (((h * 60 + m - (Number(st.planLead) || 30)) % 1440) + 1440) % 1440;
+  return { hour: Math.floor(mins / 60), minute: mins % 60 };
+}
+
+// the wind-down notice comes half an hour before the sleep lock starts
+export const WIND_LEAD = 30;
+export function windDownTime(from) {
+  const [h, m] = String(from || '23:00').split(':').map(Number);
+  const mins = (((h * 60 + m - WIND_LEAD) % 1440) + 1440) % 1440;
   return { hour: Math.floor(mins / 60), minute: mins % 60 };
 }
 
@@ -176,6 +184,13 @@ export async function syncNotifications() {
       if (S.bucket.some((b) => b.status === 'open')) {
         list.push({ id: 7, channelId: CHANNEL, title: 'Your dream of the month', body: 'Pick one dream to move forward this month.', schedule: { on: { day: 1, hour: 10, minute: 0 }, allowWhileIdle: true }, extra: { type: 'bucket' } });
       }
+    }
+
+    // wind-down: every evening, half an hour before the sleep lock shuts the apps (the lock itself is enforced natively)
+    const sleepLock = S.sleepLock;
+    if (st.windDownOn !== false && sleepLock && sleepLock.on) {
+      const { hour, minute } = windDownTime(sleepLock.from);
+      list.push({ id: 8, channelId: CHANNEL, title: `Sleep lock in ${WIND_LEAD} minutes`, body: `Finish what you are doing. Your apps lock at ${fmtTime(sleepLock.from)}.`, schedule: { on: { hour, minute }, allowWhileIdle: true }, extra: { type: 'screen' } });
     }
 
     // every reminder carries the Prysm logo as its large icon (phones keep showing an old app icon they saved earlier)
