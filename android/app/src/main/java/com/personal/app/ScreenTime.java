@@ -6,6 +6,7 @@ import android.app.admin.DevicePolicyManager;
 import android.app.usage.UsageEvents;
 import android.app.usage.UsageStatsManager;
 import android.content.ComponentName;
+import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -14,6 +15,8 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.Process;
 import android.os.SystemClock;
 import android.provider.Settings;
@@ -30,13 +33,16 @@ import com.getcapacitor.JSObject;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Collection;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TimeZone;
@@ -750,19 +756,43 @@ final class ScreenTime {
     }
 
     /** Runs every minute while the keep-alive service lives: shouts when something that holds a promise up has been switched off. */
+    private static boolean healthy = true;
+    private static int deadTicks = 0;
+
     static void watchdog(Context ctx) {
         settleFocus(ctx);
         if (!guardActive(ctx)) {
             ScreenAlerts.cancel(ctx, ScreenAlerts.ID_BLOCKING);
             ScreenAlerts.cancel(ctx, ScreenAlerts.ID_ADMIN);
+            deadTicks = 0;
             return;
         }
-        if (!accessibilityEnabled(ctx)) {
-            ScreenAlerts.post(ctx, ScreenAlerts.ID_BLOCKING, "Blocking is off",
-                    "Your limits are locked, but the Prysm accessibility service is off, so nothing is being blocked. Tap to turn it back on.",
-                    new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
-        } else {
+        // "on" in Settings is not enough: the phone can freeze or kill the service and leave the switch on
+        boolean listed = accessibilityEnabled(ctx);
+        boolean running = PrysmAccessibilityService.instance != null;
+        boolean ok = listed && running;
+        if (ok != healthy) {
+            healthy = ok;
+            diag(ctx, ok ? "Blocking is running again" : listed ? "Blocking service is not running (the phone stopped it)" : "Accessibility service was switched off");
+        }
+        if (ok) {
+            deadTicks = 0;
             ScreenAlerts.cancel(ctx, ScreenAlerts.ID_BLOCKING);
+        } else {
+            deadTicks++;
+            boolean fixed = false;
+            if (!listed || deadTicks >= 2) {
+                fixed = turnOnAccessibility(ctx, listed);
+                if (fixed) diag(ctx, listed ? "Prysm restarted the accessibility service" : "Prysm switched the accessibility service back on");
+            }
+            if (fixed) {
+                ScreenAlerts.cancel(ctx, ScreenAlerts.ID_BLOCKING);
+            } else if (!listed || deadTicks >= 2) {
+                ScreenAlerts.post(ctx, ScreenAlerts.ID_BLOCKING, "Blocking is off",
+                        listed ? "Your limits are locked, but the phone has stopped the Prysm blocking service, so nothing is being blocked. Tap to switch it off and on again in Accessibility."
+                                : "Your limits are locked, but the Prysm accessibility service is off, so nothing is being blocked. Tap to turn it back on.",
+                        new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+            }
         }
         if (!adminActive(ctx)) {
             ScreenAlerts.post(ctx, ScreenAlerts.ID_ADMIN, "Uninstall protection is off",
@@ -770,6 +800,127 @@ final class ScreenTime {
                     new Intent(ctx, MainActivity.class));
         } else {
             ScreenAlerts.cancel(ctx, ScreenAlerts.ID_ADMIN);
+        }
+    }
+
+    // ---------- keeping the blocking service alive ----------
+    /** Android lets an app write the accessibility switch only after a one-time grant from a computer (ADB). Optional. */
+    static boolean secureGranted(Context ctx) {
+        try {
+            return ctx.checkCallingOrSelfPermission("android.permission.WRITE_SECURE_SETTINGS") == PackageManager.PERMISSION_GRANTED;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static boolean sameService(Context ctx, String entry) {
+        ComponentName me = new ComponentName(ctx, PrysmAccessibilityService.class);
+        return entry.equals(me.flattenToString()) || entry.equals(me.flattenToShortString());
+    }
+
+    /**
+     * Switches Prysm's own accessibility service on again (or, when it is listed but not running, off and on so Android
+     * binds it afresh). Only possible when WRITE_SECURE_SETTINGS was granted over ADB; returns false otherwise.
+     */
+    static boolean turnOnAccessibility(final Context ctx, boolean restart) {
+        if (!secureGranted(ctx)) return false;
+        try {
+            final ContentResolver cr = ctx.getContentResolver();
+            String cur = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+            StringBuilder others = new StringBuilder();
+            if (cur != null) {
+                for (String part : cur.split(":")) {
+                    if (part.isEmpty() || sameService(ctx, part)) continue;
+                    if (others.length() > 0) others.append(':');
+                    others.append(part);
+                }
+            }
+            final String base = others.toString();
+            final String me = new ComponentName(ctx, PrysmAccessibilityService.class).flattenToString();
+            final String withMe = base.isEmpty() ? me : base + ":" + me;
+            if (restart) {
+                Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, base);
+                new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, withMe);
+                            Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1);
+                        } catch (Exception ignored) {
+                            // the next minute tries again
+                        }
+                    }
+                }, 1200);
+            } else {
+                Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, withMe);
+                Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1);
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    // ---------- a short log of what the blocking did (why it stopped, what it caught) ----------
+    private static final int DIAG_MAX = 60;
+
+    static synchronized void diag(Context ctx, String line) {
+        try {
+            SharedPreferences p = prefs(ctx);
+            JSONArray old = new JSONArray(p.getString("diag", "[]"));
+            JSONArray out = new JSONArray();
+            for (int i = Math.max(0, old.length() - (DIAG_MAX - 1)); i < old.length(); i++) out.put(old.optString(i));
+            out.put(new SimpleDateFormat("d MMM HH:mm:ss", Locale.ENGLISH).format(new Date()) + "  " + line);
+            p.edit().putString("diag", out.toString()).apply();
+        } catch (Exception ignored) {
+            // a log must never cause trouble
+        }
+    }
+
+    static synchronized JSONArray diagLines(Context ctx) {
+        try {
+            return new JSONArray(prefs(ctx).getString("diag", "[]"));
+        } catch (Exception e) {
+            return new JSONArray();
+        }
+    }
+
+    // ---------- is there anything to enforce? ----------
+    /** A limit, a switched-on sleep lock or a running focus session exists: the blocking service keeps looking. */
+    static boolean hasRules(Context ctx) {
+        JSONObject cfg = config(ctx);
+        JSONArray limits = cfg.optJSONArray("limits");
+        if (limits != null && limits.length() > 0) return true;
+        JSONObject sleep = cfg.optJSONObject("sleep");
+        if (sleep != null && sleep.optBoolean("on", true)) return true;
+        return ScreenRules.focusRunning(cfg.optJSONObject("focus"), now(ctx));
+    }
+
+    /**
+     * The app the usage log says is in front: the last one that resumed and has not paused since (looking back 3 minutes).
+     * A second opinion for when the accessibility service cannot read the window; null when unknown.
+     */
+    static String topPackageByUsage(Context ctx) {
+        try {
+            if (!hasUsageAccess(ctx)) return null;
+            UsageStatsManager usm = (UsageStatsManager) ctx.getSystemService(Context.USAGE_STATS_SERVICE);
+            if (usm == null) return null;
+            long end = System.currentTimeMillis();
+            UsageEvents events = usm.queryEvents(end - 3 * 60000L, end);
+            if (events == null) return null;
+            UsageEvents.Event e = new UsageEvents.Event();
+            String top = null;
+            while (events.hasNextEvent()) {
+                events.getNextEvent(e);
+                String p = e.getPackageName();
+                if (p == null) continue;
+                int t = e.getEventType();
+                if (t == 1) top = p;                                   // resumed / moved to the foreground
+                else if ((t == 2 || t == 23) && p.equals(top)) top = null; // paused / stopped
+            }
+            return top;
+        } catch (Exception ignored) {
+            return null;
         }
     }
 

@@ -328,6 +328,16 @@ public class PaymentCapturePlugin extends Plugin {
         r.put("listener", ScreenTime.listenerEnabled(ctx));
         r.put("battery", pm != null && pm.isIgnoringBatteryOptimizations(ctx.getPackageName()));
         r.put("locked", ScreenTime.guardActive(ctx));
+        r.put("secure", ScreenTime.secureGranted(ctx));
+        r.put("running", PrysmAccessibilityService.instance != null);
+        call.resolve(r);
+    }
+
+    /** The last things the blocking service did (started, stopped, caught a retry), newest last. */
+    @PluginMethod
+    public void getDiag(PluginCall call) {
+        JSObject r = new JSObject();
+        r.put("lines", ScreenTime.diagLines(getContext()));
         call.resolve(r);
     }
 

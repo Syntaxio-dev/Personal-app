@@ -542,7 +542,7 @@ html, body { max-width: 100%; }
 @media (min-width: 1100px) { #tabs button .tb { top: 50%; left: auto; right: 14px; transform: translateY(-50%); } }
 
 .hero { position: relative; }
-.hero button.eye { position: absolute; top: 10px; right: 10px; color: var(--p3); }
+.dots { cursor: pointer; letter-spacing: 2px; padding: 2px 10px 2px 0; -webkit-tap-highlight-color: transparent; }
 
 /* ---------- focus sessions, streaks and the sleep estimate (v1.6) ---------- */
 .fc-run { border-color: rgba(124,58,237,0.35); background: linear-gradient(180deg, rgba(124,58,237,0.14), rgba(255,255,255,0.04)); }
@@ -555,3 +555,7 @@ html, body { max-width: 100%; }
 .lim-streak { margin-top: 10px; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--t2); }
 .lim-streak i { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--green); box-shadow: 0 0 8px rgba(74,222,128,0.5); }
 .lim-streak b { color: var(--green); }
+
+/* wealth split bar */
+.alloc { display: flex; gap: 2px; height: 8px; border-radius: 8px; overflow: hidden; margin: 4px 0 10px; }
+.alloc > i { display: block; height: 100%; min-width: 3px; }

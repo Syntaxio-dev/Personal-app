@@ -13,7 +13,7 @@ const empty = () => ({
     salary: 0, name: '', sleep: '23:00', planLead: 30, planOn: true, remindOn: true, nagOn: true, askedNotif: false, askedExact: false, weekOff: [0], attStart: '',
     salaryDay: 11, salaryAmount: 0, openingBalance: 0, salaryOn: true, billOn: true, weeklyOn: true, backupOn: true,
     dashOrder: ['wallet', 'quick', 'tasks', 'goals', 'attendance', 'bills', 'bucket', 'screen'], dashHidden: [],
-    goalCheckOn: true, dreamOn: true, dreamPick: null, keepAlive: true, haptics: true, hideBalance: false, lastBackup: 0, streakSeen: {}, windDownOn: true,
+    goalCheckOn: true, dreamOn: true, dreamPick: null, keepAlive: true, haptics: true, hideBalance: false, lastBackup: 0, streakSeen: {}, windDownOn: true, customCats: [], setupSnooze: 0,
   },
   transactions: [],
   budgets: {},
@@ -49,6 +49,7 @@ const normalize = (s) => {
   out.focus = { active: null, log: [], ...(out.focus && typeof out.focus === 'object' ? out.focus : {}) };
   if (!Array.isArray(out.focus.log)) out.focus.log = [];
   if (!out.settings.streakSeen || typeof out.settings.streakSeen !== 'object') out.settings.streakSeen = {};
+  if (!Array.isArray(out.settings.customCats)) out.settings.customCats = [];
   delete out.settings.screenStrict;
   return out;
 };
@@ -158,14 +159,16 @@ function sanitize(s) {
   Object.entries(s.settings.streakSeen && typeof s.settings.streakSeen === 'object' ? s.settings.streakSeen : {}).forEach(([k, v]) => { if (/^[\w-]{1,64}$/.test(k) && num(v) > 0) seen[k] = Math.round(num(v)); });
   s.settings.streakSeen = seen;
   const att = {};
-  Object.entries(s.attendance && typeof s.attendance === 'object' ? s.attendance : {}).forEach(([k, v]) => { if (day(k) && v && ['P', 'H', 'L', 'O', 'A'].includes(v.s)) att[k] = { s: v.s }; });
+  Object.entries(s.attendance && typeof s.attendance === 'object' ? s.attendance : {}).forEach(([k, v]) => { if (day(k) && v && ['P', 'H', 'L', 'O', 'A'].includes(v.s)) { att[k] = { s: v.s }; const note = str(v.note).trim().slice(0, 200); if (note && (v.s === 'H' || v.s === 'L')) att[k].note = note; } });
   s.attendance = att;
   const budgets = {};
   Object.entries(s.budgets && typeof s.budgets === 'object' ? s.budgets : {}).forEach(([k, v]) => { if (num(v) > 0) budgets[str(k)] = num(v); });
   s.budgets = budgets;
-  ['salary', 'salaryDay', 'salaryAmount', 'openingBalance', 'planLead', 'lastBackup'].forEach((k) => { s.settings[k] = num(s.settings[k]); });
+  ['salary', 'salaryDay', 'salaryAmount', 'openingBalance', 'planLead', 'lastBackup', 'setupSnooze'].forEach((k) => { s.settings[k] = num(s.settings[k]); });
   s.settings.haptics = s.settings.haptics !== false;
   s.settings.hideBalance = !!s.settings.hideBalance;
+  const seenCat = new Set();
+  s.settings.customCats = (Array.isArray(s.settings.customCats) ? s.settings.customCats : []).map((c) => str(c).trim().slice(0, 20)).filter((c) => c && !seenCat.has(c.toLowerCase()) && seenCat.add(c.toLowerCase())).slice(0, 40);
   if (!s.settings.salaryDay) s.settings.salaryDay = 11;
   if (!s.settings.planLead) s.settings.planLead = 30;
   s.settings.name = str(s.settings.name).slice(0, 30);

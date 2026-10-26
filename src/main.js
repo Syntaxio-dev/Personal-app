@@ -24,7 +24,26 @@ import { createScreen } from './screenui.js';
 import { pad, dateStr, today, addDays, daysBetween, dayName, dayLabel, fmtTime } from './dates.js';
 import { syncNotifications, initNotifications, planTime, exactAlarmsAllowed, openExactAlarmSettings, NAG_SLOTS, setNativePlan, setSyncHook, testReminder } from './notify.js';
 
+// "Hide balance" in Settings keeps amounts as dots; a tap on the dots shows them for REVEAL_MS
+const REVEAL_MS = 12000;
+const MASK = '<span class="dots" data-act="revealBalance" role="button" aria-label="Tap to show">••••</span>';
+let revealUntil = 0;
+let revealTimer = 0;
+const balanceHidden = () => !!db.get().settings.hideBalance && Date.now() >= revealUntil;
+function rehideBalance() {
+  clearTimeout(revealTimer);
+  if (!revealUntil) return;
+  revealUntil = 0;
+  if (tab === 'home' || tab === 'money') render();
+}
+
 const CATEGORIES = ['Food', 'Groceries', 'Petrol', 'Vehicle', 'Travel', 'Bills', 'Rent', 'Shopping', 'Health', 'Fun', 'Family', 'Friends', 'Loan EMI', 'Repayment', 'Other'];
+// built-in categories plus the ones added from the expense form (settings.customCats)
+const allCategories = () => {
+  const mine = db.get().settings.customCats || [];
+  const have = new Set(CATEGORIES.map((c) => c.toLowerCase()));
+  return [...CATEGORIES, ...mine.filter((c) => !have.has(c.toLowerCase()))];
+};
 const STATUS = { P: 'Present', A: 'Absent', H: 'Half-day', L: 'Leave', O: 'Holiday' };
 // Absent is grey on purpose: grey reads as inactivity, red as an alarm
 const STATUS_COLOR = { P: '#4ade80', A: '#8b8b95', H: '#fbbf24', L: '#818cf8', O: '#a78bfa' };
@@ -275,6 +294,27 @@ function tabBadges() {
   return out;
 }
 
+// Screen time permissions: shown on the dashboard when a limit or sleep lock exists and something it needs is off.
+// Hidden once everything is granted; the optional auto-recover grant can be put off for a week.
+function screenSetupBanner() {
+  if (!Capacitor.isNativePlatform()) return '';
+  const S = db.get(), st = S.settings;
+  if (!(S.limits.length || S.sleepLock)) return '';
+  const info = screenUi.getStatus();
+  if (!info.known || info.missing) return '';
+  const need = screenUi.missing();
+  const optional = !info.secure && Date.now() >= (st.setupSnooze || 0);
+  if (!need.length && !optional) return '';
+  if (need.length) {
+    return `<div class="card dcard attn"><div class="dhead"><h2>Screen time setup</h2><span class="bad">${need.length} off</span></div>
+      <div class="muted" style="margin-bottom:14px;line-height:1.5">Blocking is only as strong as its permissions. Still off: ${need.map(([n]) => esc(n)).join(', ')}.</div>
+      <button class="btn sm" data-act="scSetup">Finish setup</button></div>`;
+  }
+  return `<div class="card dcard"><div class="dhead"><h2>Keep blocking on</h2></div>
+    <div class="muted" style="margin-bottom:14px;line-height:1.5">Optional: let Prysm switch its blocking back on by itself if your phone turns it off. Needs a one-time step from a PC.</div>
+    <div class="grid2"><button class="btn alt sm" data-act="scSecureHelp">Show steps</button><button class="btn alt sm" data-act="scSecureLater">Not now</button></div></div>`;
+}
+
 function captureBanner() {
   const S = db.get();
   const waiting = S.inbox.length;
@@ -387,7 +427,7 @@ function showInboxItem() {
   const more = db.get().inbox.length - 1;
   openModal(`<h2>Payment detected</h2>
     <div class="label">Amount ₹</div><input id="f-amt" type="number" inputmode="decimal" value="${p.amount}">
-    <div class="label">Category</div><select id="f-cat">${CATEGORIES.map((c) => `<option ${c === p.category ? 'selected' : ''}>${c}</option>`).join('')}</select>
+    <div class="label">Category</div><select id="f-cat">${allCategories().map((c) => `<option ${c === p.category ? 'selected' : ''}>${c}</option>`).join('')}</select>
     <div class="label">Note</div><input id="f-note" value="${esc(p.note || p.payee || '')}" placeholder="Note (optional)">
     <div class="label">Also paid in cash ₹ (optional)</div><input id="f-cash" type="number" inputmode="decimal" placeholder="0">
     <div class="grid2"><button class="btn alt" data-act="skipInbox">Skip</button><button class="btn" data-act="saveInbox">Save expense</button></div>
@@ -397,8 +437,8 @@ function showInboxItem() {
 function dashWidget(id) {
   const S = db.get(), t = today();
   if (id === 'wallet') {
-    const sp = money.safeToSpend(S), hide = !!S.settings.hideBalance;
-    return `<div class="hero" data-act="goto" data-tab="money"><button class="icon eye" data-act="toggleBalance" aria-label="${hide ? 'Show' : 'Hide'} balance">${svg(hide ? 'eyeoff' : 'eye')}</button><div class="label">Wallet balance</div><div class="num" ${hide ? '' : `data-count="${sp.wallet}"`}>${hide ? '••••' : inr(sp.wallet)}</div><div class="sub">Safe to spend ${hide ? '••••' : inr(sp.safe)}</div></div>`;
+    const sp = money.safeToSpend(S), hide = balanceHidden();
+    return `<div class="hero" data-act="goto" data-tab="money"><div class="label">Wallet balance</div><div class="num" ${hide ? '' : `data-count="${sp.wallet}"`}>${hide ? MASK : inr(sp.wallet)}</div><div class="sub">Safe to spend ${hide ? MASK : inr(sp.safe)}</div></div>`;
   }
   if (id === 'quick') {
     return `<div class="quick"><button data-act="addExpense">${svg('expense')}<span>Expense</span></button><button data-act="addIncome">${svg('income')}<span>Income</span></button><button data-act="addTodo">${svg('plus')}<span>Task</span></button></div>`;
@@ -455,7 +495,8 @@ const ord = (n) => n + ['th', 'st', 'nd', 'rd'][n % 10 > 3 || [11, 12, 13].inclu
 
 const moneyUi = createMoney({
   ui, openModal, closeModal, commit, render: (a) => render(a), esc, inr, svg, dot, monthPicker, getYm: () => ym,
-  syncNotifications: () => syncNotifications(), showLayer, hideLayer, categories: CATEGORIES,
+  syncNotifications: () => syncNotifications(), showLayer, hideLayer, categories: allCategories,
+  balanceHidden, mask: MASK,
 });
 
 const goalsUi = createGoals({
@@ -477,7 +518,7 @@ const views = {
     const widgets = st.dashOrder.filter((id) => !st.dashHidden.includes(id)).map(dashWidget).join('');
     const hour = new Date().getHours();
     const hello = hour < 5 ? 'Good night' : hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-    return `<div class="greet">${hello}${st.name ? ', ' + esc(st.name) : ''}</div>${dueBanner()}${captureBanner()}${backupNudge()}${widgets || '<div class="empty"><b>Your dashboard is empty</b><span>Tap Customize below to choose what you want to see here.</span></div>'}<button class="link center" data-act="dashEdit">Customize dashboard</button>`;
+    return `<div class="greet">${hello}${st.name ? ', ' + esc(st.name) : ''}</div>${dueBanner()}${screenSetupBanner()}${captureBanner()}${backupNudge()}${widgets || '<div class="empty"><b>Your dashboard is empty</b><span>Tap Customize below to choose what you want to see here.</span></div>'}<button class="link center" data-act="dashEdit">Customize dashboard</button>`;
   },
 
   money() { return moneyUi.view(); },
@@ -512,9 +553,12 @@ const views = {
     const dd = (k) => `<div class="dd"><button class="dd-btn" data-act="ddOpen">${GRAN[attGran[k]]}${svg('down')}</button>
       <div class="menu" hidden>${Object.entries(GRAN).map(([v, l]) => `<button class="${attGran[k] === v ? 'on' : ''}" data-act="ddPick" data-k="${k}" data-v="${v}">${l}</button>`).join('')}</div></div>`;
 
+    const away = Object.keys(S.attendance).filter((k) => k.startsWith(ym) && (S.attendance[k].s === 'H' || S.attendance[k].s === 'L')).sort();
+    const awayRows = away.map((k) => { const e = S.attendance[k]; return `<div class="log-row" data-act="markDay" data-date="${k}"><div class="log-top"><b>${dot(STATUS_COLOR[e.s])}${STATUS[e.s]}</b><span>${esc(dayName(k))}</span></div><div class="log-res">${e.note ? esc(e.note) : 'No reason noted. Tap to add one.'}</div></div>`; }).join('');
     return `${monthPicker()}
       <div class="card"><div class="cal">${cells}</div><div class="legend">${legend}</div>
         <div class="muted" style="margin-top:12px">Unmarked days count as absent. Tap a day to mark it.</div></div>
+      ${awayRows ? `<div class="card"><h2>Leave and half-days</h2>${awayRows}</div>` : ''}
       <div class="card"><div class="row between"><h2 style="margin:0">Summary</h2><div class="seg">${seg('month', 'Month')}${seg('overall', 'Overall')}</div></div>
         <div class="att-hero"><div class="num">${st.pct === null ? '—' : st.pct + '%'}</div><div class="muted">attendance · ${esc(sub)}</div></div>
         <div class="bar"><div style="width:${st.pct || 0}%"></div></div>
@@ -592,7 +636,7 @@ const views = {
         <div class="muted" style="margin-top:12px">Goal reviews cannot be switched off. They are the point.</div></div>
       <div class="card"><h2>Comfort</h2>
         ${row('Haptic feedback', 'A small buzz when you tick, pay or swipe', 'haptics')}
-        ${row('Hide balance', 'Shows dots instead of your balance until you tap the eye on the wallet', 'hideBalance')}</div>
+        ${row('Hide balance', 'Shows dots instead of your balance. Tap the dots to see it for a few seconds', 'hideBalance')}</div>
       <div class="card"><h2>Money</h2>
         <div class="set-row"><div class="grow"><b>Salary day</b><span>You are reminded the day after if it is not added</span></div><button class="capsule set" style="margin:0" data-act="setSalaryDay"><span>${ord(Number(st.salaryDay) || 11)}</span></button></div>
         <div class="set-row"><div class="grow"><b>Expected salary</b><span>Pre-fills the Add salary form</span></div><button class="capsule ${st.salaryAmount ? 'set' : ''}" style="margin:0" data-act="setSalaryAmt"><span>${st.salaryAmount ? inr(st.salaryAmount) : 'Not set'}</span></button></div>
@@ -958,10 +1002,29 @@ function markDayForm(date) {
   const cur = v && v.s !== 'A' ? v.s : '';
   const t = today();
   const hint = date > t ? 'You can plan leave or a holiday in advance.' : date === t ? 'If you leave today unmarked it becomes absent at midnight.' : 'Unmarked days count as absent.';
-  openModal(`<h2>${esc(dayName(date))}</h2>
+  setSheet(`<h2>${esc(dayName(date))}</h2>
     <div class="muted" style="margin:-8px 0 14px">${hint}</div>
     <div class="grid2">${['P', 'H', 'L', 'O'].map((k) => `<button class="btn ${cur === k ? 'on' : 'alt'}" data-act="setDay" data-date="${date}" data-s="${k}">${dot(STATUS_COLOR[k])}${STATUS[k]}</button>`).join('')}</div>
+    ${v && v.note ? `<div class="muted" style="margin-top:12px">Reason: ${esc(v.note)}</div>` : ''}
     ${cur ? `<button class="btn danger" style="margin-top:10px" data-act="clearDay" data-date="${date}">Clear mark</button>` : ''}`);
+}
+
+// swap the content of the open sheet in place (no slide-up replay), or open it
+function setSheet(html) {
+  const sheet = document.querySelector('#modal .sheet');
+  if (sheet && !$('modal').hidden) sheet.innerHTML = html; else openModal(html);
+}
+
+// a half-day or leave always needs its reason, so it can be tracked later
+function dayNoteForm(date, s) {
+  const v = db.get().attendance[date];
+  setSheet(`<h2>${STATUS[s]} · ${esc(dayName(date))}</h2>
+    <div class="muted" style="margin:-8px 0 14px">Add a note: what is the reason? It is kept with this day.</div>
+    <input id="att-note" maxlength="200" placeholder="e.g. Fever, family function, bank work" value="${v && v.s === s && v.note ? esc(v.note) : ''}" autocomplete="off">
+    <button class="btn" data-act="saveDayNote" data-date="${date}" data-s="${s}">Save</button>
+    <button class="btn alt" style="margin-top:10px" data-act="markDay" data-date="${date}">Back</button>`);
+  const el = $('att-note');
+  if (el) el.focus();
 }
 
 // ---------- backup ----------
@@ -1005,7 +1068,15 @@ const actions = {
   markDay: (el) => markDayForm(el.dataset.date),
   setDay: async (el) => {
     const date = el.dataset.date;
+    if (el.dataset.s === 'H' || el.dataset.s === 'L') return dayNoteForm(date, el.dataset.s);
     db.get().attendance[date] = { s: el.dataset.s };
+    buzz('ok');
+    closeModal(); await commit();
+  },
+  saveDayNote: async (el) => {
+    const note = ($('att-note').value || '').trim();
+    if (note.length < 3) return ui.alert('Please add a reason (at least 3 characters).');
+    db.get().attendance[el.dataset.date] = { s: el.dataset.s, note: note.slice(0, 200) };
     buzz('ok');
     closeModal(); await commit();
   },
@@ -1121,11 +1192,14 @@ const actions = {
     hideLayer($('toast'));
     if (f) { buzz('ok'); await f(); }
   },
-  toggleBalance: async () => {
-    const st = db.get().settings;
-    st.hideBalance = !st.hideBalance;
+  // tapping the dots shows the amounts for a few seconds, then they go back to dots
+  revealBalance: () => {
+    revealUntil = Date.now() + REVEAL_MS;
+    clearTimeout(revealTimer);
+    revealTimer = setTimeout(rehideBalance, REVEAL_MS);
     buzz('tick');
-    await commit();
+    render();
+    countUp();
   },
   planTomorrow: showPlan,
   planGoal: (el) => { draft.goalId = draft.goalId === el.dataset.id ? '' : el.dataset.id; paintDraft(); },
@@ -1177,6 +1251,7 @@ const actions = {
       }
     }
     if (k === 'haptics' && st[k]) buzz('ok');
+    if (k === 'hideBalance') { revealUntil = 0; clearTimeout(revealTimer); }
     // only the reminder switches need the notification permission
     if (st[k] && !['haptics', 'hideBalance'].includes(k)) await ensureNotifPermission('Prysm needs notification permission to send these reminders.');
     await commit(); syncNotifications();
@@ -1427,8 +1502,10 @@ async function ensureAttStart() {
 }
 
 async function onResume() {
+  rehideBalance();
   if (purgeDone()) await db.save();
-  await screenUi.sync(true);
+  const screenChanged = await screenUi.sync(true);
+  if (screenChanged && (tab === 'home' || tab === 'screen') && $('modal').hidden && $('dialog').hidden) render();
   await syncPayments();
   syncNotifications();
   goalsUi.checkDue({ force: true });

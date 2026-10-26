@@ -162,6 +162,13 @@ export function billsFor(S, m, t = today()) {
   }).sort((a, b) => Number(a.paid) - Number(b.paid) || a.due.localeCompare(b.due));
 }
 
+// monthly bills that begin in a later month (an EMI that starts next month, a bill added after its due day)
+export function upcomingBills(S, m) {
+  return S.commitments.filter((c) => c.kind !== 'owed' && c.kind !== 'plan' && c.active !== false && (c.startMonth || '0000-00') > m)
+    .map((c) => ({ c, due: dueDate(c, c.startMonth) }))
+    .sort((a, b) => a.due.localeCompare(b.due));
+}
+
 // EMIs still to pay, counting this month only if it is unpaid
 export function emisLeft(c, m, paid) {
   return c.endMonth ? Math.max(0, monthDiff(m, c.endMonth) + (paid ? 0 : 1)) : null;

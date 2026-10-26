@@ -159,4 +159,6 @@
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />
     <!-- a blocked app is freed from the background once its block screen sends the user home -->
     <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
+    <!-- optional: granted once from a computer (adb shell pm grant), lets Prysm switch its own accessibility service back on -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" tools:ignore="ProtectedPermissions" />
 </manifest>

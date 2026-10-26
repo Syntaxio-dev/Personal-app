@@ -55,6 +55,14 @@ public class PrysmAccessibilityService extends AccessibilityService {
     private static final int HOME_AFTER = 9;
     private static final int GUARD_HOME_AFTER = 4;
     private static final long BLOCK_MAX = 25000L;
+    // while a promise exists the service asks once a second which app is really in front, so a lost window event
+    // (the Recents gesture lifted a little and dropped again) can never leave an app open
+    private static final long BEAT = 1000L;
+    private static final long WATCH = 600L;
+    private static final int LEAVE_READS = 2;               // the block goes only after the app has been gone for this many looks
+    private static final long REOPEN_MS = 30000L;           // coming back to a blocked app within this time is a retry
+    private static final int REOPEN_HOME_AFTER = 2;
+    private static final int EV_BASE = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED | AccessibilityEvent.TYPE_WINDOWS_CHANGED;
     private static final String[] URL_IDS = {"url_bar", "url_field", "location_bar_edit_text", "mozac_browser_toolbar_url_view", "omnibarTextInput", "url", "search_box_text", "address_bar"};
 
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -76,6 +84,34 @@ public class PrysmAccessibilityService extends AccessibilityService {
     private String lastRaw = null;       // what the address bar showed the last time it was read
     private String stickyHost = null;
     private long stickyAt = 0;
+    private String lastBlockedPkg = "";
+    private long lastBlockedAt = 0;
+    private int goneReads = 0;
+    private boolean quickPending = false;
+
+    private final Runnable beat = new Runnable() {
+        @Override
+        public void run() {
+            try {
+                checkFront();
+            } catch (Exception ignored) {
+                // never disturb the phone
+            }
+            scheduleBeat();
+        }
+    };
+
+    private final Runnable quick = new Runnable() {
+        @Override
+        public void run() {
+            quickPending = false;
+            try {
+                checkFront();
+            } catch (Exception ignored) {
+                // never disturb the phone
+            }
+        }
+    };
 
     private final Runnable tick = new Runnable() {
         @Override
@@ -86,7 +122,8 @@ public class PrysmAccessibilityService extends AccessibilityService {
         }
     };
 
-    // a block screen that has lost track of its app must not stay over the phone
+    // The block screen stays over the app until the app has really been left. The Recents gesture shows the launcher for a
+    // moment even when you put the app back, so one look at the launcher is not enough: it must be gone for LEAVE_READS looks.
     private final Runnable overlayWatch = new Runnable() {
         @Override
         public void run() {
@@ -106,15 +143,20 @@ public class PrysmAccessibilityService extends AccessibilityService {
                         boolean left = !name.equals(blockPkg) && !name.equals(getPackageName())
                                 && (ScreenTime.isHome(PrysmAccessibilityService.this, name) || !ScreenTime.protectedPackages(PrysmAccessibilityService.this).contains(name));
                         if (left) {
-                            removeBlock();
-                            return;
+                            goneReads++;
+                            if (goneReads >= LEAVE_READS) {
+                                removeBlock();
+                                return;
+                            }
+                        } else if (name.equals(blockPkg)) {
+                            goneReads = 0;
                         }
                     }
                 }
             } catch (Exception ignored) {
                 // keep watching
             }
-            handler.postDelayed(this, 1500);
+            handler.postDelayed(this, WATCH);
         }
     };
 
@@ -154,12 +196,14 @@ public class PrysmAccessibilityService extends AccessibilityService {
                     accrue();
                     screenOn = false;
                     handler.removeCallbacks(tick);
+                    handler.removeCallbacks(beat);
                     removeBlock();
                 } else if (Intent.ACTION_SCREEN_ON.equals(a) || Intent.ACTION_USER_PRESENT.equals(a)) {
                     screenOn = true;
                     accrueAt = SystemClock.elapsedRealtime();
                     handler.removeCallbacks(syncForeground);
                     handler.postDelayed(syncForeground, 500);
+                    scheduleBeat();
                 } else {
                     // the date, the time or the time zone was changed: let the clock notice it right away
                     ScreenTime.now(c);
@@ -192,12 +236,26 @@ public class PrysmAccessibilityService extends AccessibilityService {
         screenOn = pm == null || pm.isInteractive();
         ScreenTime.snapshot(this);
         if (KeepAliveService.wanted(this)) KeepAliveService.start(this);
+        ScreenTime.diag(this, "Blocking service started");
+        scheduleBeat();
     }
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (event == null) return;
         int type = event.getEventType();
+        if (type == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
+            // windows came or went (also when a lifted app is put back, which sends no other event): look at who is in front
+            try {
+                if (!quickPending && blockView == null && ScreenTime.hasRules(this)) {
+                    quickPending = true;
+                    handler.postDelayed(quick, 250);
+                }
+            } catch (Exception ignored) {
+                // never let a bug here disturb the phone
+            }
+            return;
+        }
         CharSequence cs = event.getPackageName();
         if (cs == null) return;
         String pkg = cs.toString();
@@ -206,11 +264,14 @@ public class PrysmAccessibilityService extends AccessibilityService {
             if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
                 ScreenTime.snapshot(this);
                 if (ScreenTime.isHome(this, pkg)) {
+                    // the launcher also shows during a half-finished Recents gesture, so an open block screen is NOT removed
+                    // here; overlayWatch removes it once the app has really been left
                     leaveForeground();
                     setContentEvents(false);
-                    removeBlock();
+                    scheduleBeat();
                     return;
                 }
+                scheduleBeat();
                 boolean guardPkg = ScreenRules.isGuardPackage(pkg);
                 if (guardPkg) {
                     setContentEvents(ScreenTime.guardActive(this));
@@ -240,12 +301,13 @@ public class PrysmAccessibilityService extends AccessibilityService {
 
     @Override
     public void onInterrupt() {
-        handler.removeCallbacks(tick);
-        removeBlock();
+        // the system asks to stop feedback for a moment; the block must not go away because of it
+        ScreenTime.diag(this, "Interrupted by the system (kept running)");
     }
 
     @Override
     public boolean onUnbind(Intent intent) {
+        ScreenTime.diag(this, "Blocking service stopped (switched off, or the phone stopped it)");
         cleanUp();
         return super.onUnbind(intent);
     }
@@ -267,13 +329,61 @@ public class PrysmAccessibilityService extends AccessibilityService {
         }
     }
 
+    // ---------- the heartbeat ----------
+    private void scheduleBeat() {
+        handler.removeCallbacks(beat);
+        if (!screenOn || instance != this) return;
+        try {
+            if (blockView == null && !ScreenTime.hasRules(this)) return;
+        } catch (Exception ignored) {
+            // keep beating
+        }
+        handler.postDelayed(beat, BEAT);
+    }
+
+    /**
+     * Asks the phone which app is really in front and acts on it, whatever window events did or did not arrive.
+     * This closes the Recents-gesture trick: the app is lifted (the launcher shows, the state is cleared) and put
+     * back (no event), and the next look finds the app again and checks its limit.
+     */
+    private void checkFront() {
+        if (!screenOn || blockView != null) return;
+        String pkg = null;
+        AccessibilityNodeInfo root = null;
+        try {
+            root = getRootInActiveWindow();
+            if (root != null && root.getPackageName() != null) pkg = root.getPackageName().toString();
+        } catch (Exception ignored) {
+            // fall back to the usage log
+        } finally {
+            recycle(root);
+        }
+        if (pkg == null) pkg = ScreenTime.topPackageByUsage(this);
+        if (pkg == null || pkg.equals(getPackageName())) return;
+        if (ScreenTime.isHome(this, pkg)) {
+            if (!fgPkg.isEmpty()) {
+                leaveForeground();
+                setContentEvents(false);
+            }
+            return;
+        }
+        if (ScreenTime.protectedPackages(this).contains(pkg)) return;
+        boolean browser = ScreenTime.isBrowser(this, pkg);
+        if (!pkg.equals(fgPkg)) {
+            setContentEvents(browser && ScreenTime.domainRules(this));
+            onForeground(pkg, browser);
+        } else if (SystemClock.uptimeMillis() - lastEval > TICK_MAX + 5000L) {
+            evaluate(); // the timer of this app died: start it again
+        }
+    }
+
     // ---------- what is in front ----------
     private void setContentEvents(boolean on) {
         if (on == contentOn) return;
         try {
             AccessibilityServiceInfo info = getServiceInfo();
             if (info == null) return;
-            info.eventTypes = on ? (AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED | AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) : AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED;
+            info.eventTypes = on ? (EV_BASE | AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) : EV_BASE;
             setServiceInfo(info);
             contentOn = on;
         } catch (Exception ignored) {
@@ -338,7 +448,10 @@ public class PrysmAccessibilityService extends AccessibilityService {
         counting = v.countIds;
         if (v.block) {
             String title = v.name.isEmpty() ? ScreenTime.labelOf(this, fgPkg) : v.name;
-            showBlock(v.kind, fgPkg, title, v.text, "focus".equals(v.kind) ? 0 : v.lockUntil, HOME_AFTER, false, host == null);
+            // back at an app that was just blocked: no long wait this time, and it goes in the log
+            boolean again = fgPkg.equals(lastBlockedPkg) && SystemClock.uptimeMillis() - lastBlockedAt < REOPEN_MS;
+            if (again) ScreenTime.diag(this, "Opened " + title + " again right after the block: blocked again");
+            showBlock(v.kind, fgPkg, title, v.text, "focus".equals(v.kind) ? 0 : v.lockUntil, again ? REOPEN_HOME_AFTER : HOME_AFTER, false, host == null);
             return;
         }
         long delay = -1;
@@ -581,6 +694,12 @@ public class PrysmAccessibilityService extends AccessibilityService {
         blockView = root;
         blockPkg = pkg;
         blockSince = SystemClock.uptimeMillis();
+        goneReads = 0;
+        if (!preview) {
+            lastBlockedPkg = pkg;
+            lastBlockedAt = blockSince;
+        }
+        handler.removeCallbacks(overlayWatch);
         handler.postDelayed(overlayWatch, 1500);
         // the app is no longer "the app in front": if the user comes back to it (Recents, the same icon again) the
         // window change is looked at in full, never skipped as "just checked"
@@ -634,5 +753,7 @@ public class PrysmAccessibilityService extends AccessibilityService {
         }
         blockView = null;
         blockPkg = "";
+        goneReads = 0;
+        if (screenOn) scheduleBeat();
     }
 }

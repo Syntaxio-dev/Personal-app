@@ -20,7 +20,7 @@ export function createScreen(d) {
   const S = () => db.get();
   const $ = (id) => document.getElementById(id);
   let range = 'today';
-  let status = { usage: false, accessibility: false, admin: false, battery: false, known: false };
+  let status = { usage: false, accessibility: false, admin: false, battery: false, secure: false, running: true, known: false };
   let lastSync = 0;
   let syncing = null;
   const icons = {};
@@ -65,8 +65,8 @@ export function createScreen(d) {
     if (!isNative) return;
     try {
       const r = await plugin.screenStatus();
-      status = { usage: !!r.usage, accessibility: !!r.accessibility, admin: !!r.admin, battery: !!r.battery, listener: r.listener !== false, locked: !!r.locked, known: true };
-    } catch (e) { status = { usage: false, accessibility: false, admin: false, battery: false, listener: false, known: true, missing: true }; }
+      status = { usage: !!r.usage, accessibility: !!r.accessibility, admin: !!r.admin, battery: !!r.battery, listener: r.listener !== false, locked: !!r.locked, secure: !!r.secure, running: r.running !== false, known: true };
+    } catch (e) { status = { usage: false, accessibility: false, admin: false, battery: false, listener: false, secure: false, running: true, known: true, missing: true }; }
   }
 
   // what the phone kept becomes what we show
@@ -401,13 +401,14 @@ export function createScreen(d) {
   function blockingCard() {
     if (!isNative) return `<div class="card"><h2>Blocking</h2><div class="sec">Blocking works in the installed Android app.</div></div>`;
     return `<div class="card"><h2>Blocking</h2>
-      ${statRow(status.usage, 'Usage access')}${statRow(status.accessibility, 'Accessibility service')}${statRow(status.admin, 'Uninstall protection')}${statRow(status.battery, 'Battery unrestricted')}${statRow(status.listener, 'Notification access')}
+      ${statRow(status.usage, 'Usage access')}${statRow(status.accessibility && status.running, status.accessibility && !status.running ? 'Accessibility service (stopped by the phone)' : 'Accessibility service')}${statRow(status.admin, 'Uninstall protection')}${statRow(status.battery, 'Battery unrestricted')}${statRow(status.listener, 'Notification access')}${statRow(status.secure, 'Auto-recover (optional)')}
+      ${status.secure ? '' : '<button class="btn alt" style="margin-top:12px" data-act="scSecureHelp">Set up auto-recover</button>'}
       <div class="grid2" style="margin-top:14px"><button class="btn alt" data-act="scAllowBlock">${status.accessibility ? 'Accessibility' : 'Turn on blocking'}</button><button class="btn alt" data-act="scAllowAdmin">${status.admin ? 'Device admin' : 'Turn on protection'}</button></div>
       <span class="label" style="margin-top:18px">See the block screen</span>
       <div class="grid2"><button class="btn alt" data-act="scPreview">Time is up</button><button class="btn alt" data-act="scPreviewSleep">Sleep time</button></div>
       <button class="btn alt" style="margin-top:10px" data-act="scPreviewFocus">Focus session</button>
       <div class="muted" style="margin-top:12px;line-height:1.5">While a limit is locked, Prysm keeps shut the Settings screens that could undo it: Accessibility, Device admin, Usage access, Date and time, Developer options, Language, and the app info, force stop, clear data and uninstall of Prysm. Android 13+: if the accessibility switch is greyed out, open App settings, tap the three dots and choose <b>Allow restricted settings</b>. Prysm only learns which app is in front, reads browser address bars and those few Settings screens. Nothing leaves your phone.</div>
-      <button class="btn alt" style="margin-top:12px" data-act="capAppSettings">App settings</button></div>`;
+      <div class="grid2" style="margin-top:12px"><button class="btn alt" data-act="capAppSettings">App settings</button><button class="btn alt" data-act="scDiag">Blocking log</button></div></div>`;
   }
 
   function view() {
@@ -544,6 +545,18 @@ export function createScreen(d) {
     if (!status.battery) out.push(['Battery unrestricted', 'Otherwise your phone may stop Prysm in the background and nothing is blocked.', 'scAllowBattery', 'Allow']);
     if (!status.listener) out.push(['Notification access', 'Lets Prysm hide the notifications of an app that is blocked, so you cannot reply to them. Payment capture uses it too.', 'scAllowListener', 'Open settings']);
     return out;
+  }
+
+  // ---------- optional: let Prysm switch its own accessibility service back on ----------
+  const SECURE_CMD = 'adb shell pm grant com.personal.app android.permission.WRITE_SECURE_SETTINGS';
+  function secureSheet() {
+    setSheet(`<h2>Auto-recover</h2>
+      <div class="muted" style="margin:-8px 0 14px;line-height:1.55">Some phones (iQOO, Vivo, Xiaomi) switch the accessibility service off by themselves, and then nothing is blocked. With this one-time step Prysm can switch it back on within a minute.</div>
+      <div class="sec" style="line-height:1.6">1. On the phone: Settings > About phone, tap the build number 7 times, then turn on <b>USB debugging</b> in Developer options.<br>2. Connect the phone to a PC that has <b>adb</b> (Android platform-tools) and allow the debugging prompt.<br>3. Run this command once:</div>
+      <div style="margin:12px 0;padding:12px;border-radius:12px;background:rgba(255,255,255,0.06);font-size:12px;word-break:break-all;user-select:all">${esc(SECURE_CMD)}</div>
+      <div class="muted" style="line-height:1.5">It stays after app updates. It only lets Prysm switch its own accessibility service on, and only while a limit is locked. It is optional.</div>
+      <button class="btn" style="margin-top:14px" data-act="scSecureCopy">Copy command</button>
+      <div class="grid2" style="margin-top:10px"><button class="btn alt" data-act="scSecureLater">Not now</button><button class="btn alt" data-act="closeModal">Close</button></div>`);
   }
 
   async function ensureReady() {
@@ -722,6 +735,28 @@ export function createScreen(d) {
       if (missing().length) readySheet(); else backToDraft();
     },
     scReadyBack: () => backToDraft(),
+    // dashboard card: finish what is missing, or explain the optional auto-recover grant
+    scSetup: async () => {
+      await refreshStatus();
+      if (missing().length) readySheet(); else secureSheet();
+    },
+    scSecureHelp: () => secureSheet(),
+    scSecureCopy: async () => {
+      try { await navigator.clipboard.writeText(SECURE_CMD); toast('Command copied'); } catch (e) { toast('Could not copy. Select the text and copy it.'); }
+    },
+    scSecureLater: async () => {
+      S().settings.setupSnooze = Date.now() + 7 * 86400000;
+      closeModal();
+      await db.save();
+      render();
+    },
+    scDiag: async () => {
+      let lines = [];
+      try { lines = (await plugin.getDiag()).lines || []; } catch (e) { lines = ['This needs the newest Prysm APK.']; }
+      setSheet(`<h2>Blocking log</h2><div class="muted" style="margin:-8px 0 14px;line-height:1.5">When the blocking service started or stopped, and every time a blocked app was opened again. Newest at the bottom.</div>
+        <div style="max-height:46vh;overflow:auto;font-size:12px;line-height:1.7;opacity:.85">${lines.length ? lines.map((l) => `<div>${esc(l)}</div>`).join('') : 'Nothing yet.'}</div>
+        <button class="btn" style="margin-top:16px" data-act="closeModal">Close</button>`);
+    },
     scPreview: async () => { try { await plugin.previewBlock({ kind: 'limit' }); } catch (e) { toast('Turn on the Prysm accessibility service first.'); } },
     scPreviewSleep: async () => { try { await plugin.previewBlock({ kind: 'sleep' }); } catch (e) { toast('Turn on the Prysm accessibility service first.'); } },
     scPreviewFocus: async () => { try { await plugin.previewBlock({ kind: 'focus' }); } catch (e) { toast('Turn on the Prysm accessibility service first.'); } },
@@ -892,7 +927,8 @@ export function createScreen(d) {
   };
 
   return {
-    view, widget, draw, afterRender, sync, pull, refreshStatus, pushConfig, actions, checkStreaks,
+    view, widget, draw, afterRender, sync, pull, refreshStatus, pushConfig, actions, checkStreaks, missing,
+    getStatus: () => status,
     locked: lockedAny,
     getRange: () => range,
     getStatus: () => status,

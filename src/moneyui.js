@@ -15,7 +15,7 @@ const ordinal = (n) => n + ['th', 'st', 'nd', 'rd'][n % 10 > 3 || [11, 12, 13].i
 
 // The Money tab: Overview | Bills | Invest | Lent. Created once by main.js with the shared UI helpers.
 export function createMoney(d) {
-  const { ui, openModal, closeModal, commit, esc, inr, svg, dot, monthPicker, getYm, syncNotifications, showLayer, hideLayer, categories } = d;
+  const { ui, openModal, closeModal, commit, esc, inr, svg, dot, monthPicker, getYm, syncNotifications, showLayer, hideLayer, categories: getCats, balanceHidden, mask } = d;
   const S = () => db.get();
   const $ = (id) => document.getElementById(id);
   let tab = 'overview';
@@ -35,6 +35,7 @@ export function createMoney(d) {
 
   const chipRow = (g, items, selected) => `<div class="chips wrap" id="g-${g}">${items.map(([v, l]) => `<button class="${v === selected ? 'on' : ''}" data-act="mChip" data-g="${g}" data-v="${esc(v)}">${esc(l)}</button>`).join('')}</div>`;
   const peopleChips = (g, selected) => `<div class="chips wrap" id="g-${g}">${S().people.map((p) => `<button class="${p === selected ? 'on' : ''}" data-act="mChip" data-g="${g}" data-v="${esc(p)}" data-toggle="1">${esc(p)}</button>`).join('')}<button data-act="newPerson" data-g="${g}">+ New</button></div>`;
+  const catChips = (selected) => `<div class="chips wrap" id="g-cat">${getCats().map((c) => `<button class="${c === selected ? 'on' : ''}" data-act="mChip" data-g="cat" data-v="${esc(c)}">${esc(c)}</button>`).join('')}<button data-act="newCat">+ New</button></div>`;
   const addPerson = (name) => { if (name && !S().people.includes(name)) S().people.push(name); };
 
   // ---------- popups: due-day grid ----------
@@ -55,15 +56,15 @@ export function createMoney(d) {
   function view() {
     const s = S();
     const unpaid = M.billsFor(s, today().slice(0, 7)).filter((b) => !b.paid).length + M.owedFor(s).filter((b) => !b.paid).length;
-    const tabs = `<div class="chips subtabs scroll">${[['overview', 'Overview'], ['bills', 'Bills'], ['invest', 'Invest'], ['lent', 'Lent'], ['report', 'Report']].map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-act="mTab" data-v="${k}">${l}${k === 'bills' && unpaid ? `<i>${unpaid}</i>` : ''}</button>`).join('')}</div>`;
-    const body = tab === 'bills' ? billsView() : tab === 'invest' ? investView() : tab === 'lent' ? lentView() : tab === 'report' ? reportView() : overview();
+    const tabs = `<div class="chips subtabs scroll">${[['overview', 'Overview'], ['wealth', 'Wealth'], ['bills', 'Bills'], ['invest', 'Invest'], ['lent', 'Lent'], ['report', 'Report']].map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-act="mTab" data-v="${k}">${l}${k === 'bills' && unpaid ? `<i>${unpaid}</i>` : ''}</button>`).join('')}</div>`;
+    const body = tab === 'wealth' ? wealthView() : tab === 'bills' ? billsView() : tab === 'invest' ? investView() : tab === 'lent' ? lentView() : tab === 'report' ? reportView() : overview();
     return tabs + body;
   }
 
   function overview() {
     const s = S(), ym = getYm();
-    const hidden = !!s.settings.hideBalance;
-    const amt = (n) => (hidden ? '••••' : inr(n));
+    const hidden = balanceHidden();
+    const amt = (n) => (hidden ? mask : inr(n));
     const m = M.monthStats(s, ym);
     const sp = M.safeToSpend(s);
     const short = new Date(`${ym}-01T00:00`).toLocaleDateString('en-IN', { month: 'short' });
@@ -71,9 +72,9 @@ export function createMoney(d) {
       : sp.perDay !== null ? `${inr(sp.perDay)} a day for ${sp.days} day${sp.days === 1 ? '' : 's'} until salary`
         : 'Set your salary day in Settings to see a daily limit.';
 
-    const budgetRows = categories.filter((c) => s.budgets[c] || m.byCat[c]).map((c) => {
+    const budgetRows = [...new Set([...getCats(), ...Object.keys(m.byCat)])].filter((c) => s.budgets[c] || m.byCat[c]).map((c) => {
       const spent = m.byCat[c] || 0, b = s.budgets[c] || 0;
-      return `<div style="margin-bottom:14px"><div class="row between"><span>${c}</span>
+      return `<div style="margin-bottom:14px"><div class="row between"><span>${esc(c)}</span>
         <span class="${b && spent > b ? 'bad' : 'muted'}">${inr(spent)}${b ? ' / ' + inr(b) : ''}${b && spent > b ? ' · over budget' : ''}</span></div>
         ${b ? `<div class="bar ${spent > b ? 'over' : ''}"><div style="width:${Math.min(100, (spent / b) * 100)}%"></div></div>` : ''}</div>`;
     }).join('') || '<div class="muted">No expenses yet.</div>';
@@ -87,7 +88,7 @@ export function createMoney(d) {
         <button class="icon" data-act="delTx" data-id="${t.id}" aria-label="Delete">${svg('trash')}</button></div>`).join('') || '<div class="muted">No entries this month.</div>';
 
     return `${monthPicker()}
-      <div class="hero"><button class="icon eye" data-act="toggleBalance" aria-label="${hidden ? 'Show' : 'Hide'} balance">${svg(hidden ? 'eyeoff' : 'eye')}</button><div class="label">Wallet balance</div><div class="num" ${hidden ? '' : `data-count="${sp.wallet}"`}>${amt(sp.wallet)}</div><hr>
+      <div class="hero"><div class="label">Wallet balance</div><div class="num" ${hidden ? '' : `data-count="${sp.wallet}"`}>${amt(sp.wallet)}</div><hr>
         <div class="grid2"><div><div class="label">In · ${short}</div><div class="val" style="color:#fff">${amt(m.income)}</div></div>
         <div><div class="label">Out · ${short}</div><div class="val" style="color:#fff">${amt(m.expense)}</div></div></div></div>
       <div class="card safe"><div class="label">Safe to spend</div><div class="num ${sp.safe < 0 && !hidden ? 'bad' : ''}" style="margin:6px 0">${amt(sp.safe)}</div>
@@ -97,6 +98,44 @@ export function createMoney(d) {
       <div class="card"><div class="row between"><h2 style="margin:0">Spending by category</h2><button class="icon" data-act="setBudget" aria-label="Edit budgets">${svg('edit')}</button></div><div style="height:12px"></div>${budgetRows}</div>
       ${people.length ? `<div class="card"><h2>Given to people</h2>${people.map(([p, v]) => `<div class="row between" style="padding:6px 0"><span>${esc(p)}</span><b class="bad">${inr(v)}</b></div>`).join('')}</div>` : ''}
       <div class="card"><h2>Entries</h2>${rows}</div>`;
+  }
+
+  // ---------- wealth: wallet + investments in one place ----------
+  const WEALTH_COLORS = ['#a78bfa', '#4ade80', '#fbbf24', '#818cf8', '#38bdf8', '#f472b6'];
+
+  function wealthView() {
+    const s = S(), hidden = balanceHidden();
+    const amt = (n) => (hidden ? mask : inr(n));
+    const wallet = M.safeToSpend(s).wallet;
+    const invs = s.investments;
+    const invested = sum(invs, M.investedOf), value = sum(invs, M.currentValue), gain = value - invested;
+    const total = wallet + value;
+    const byType = {};
+    invs.forEach((i) => { byType[i.type] = (byType[i.type] || 0) + M.currentValue(i); });
+    const parts = [['Wallet', wallet], ...Object.entries(byType)].filter((p) => p[1] > 0).map((p, k) => [...p, WEALTH_COLORS[k % WEALTH_COLORS.length]]);
+    const base = sum(parts, (p) => p[1]);
+    const alloc = base > 0 ? `<div class="alloc">${parts.map((p) => `<i style="width:${(p[1] / base) * 100}%;background:${p[2]}"></i>`).join('')}</div>
+      ${parts.map((p) => `<div class="row between" style="padding:7px 0"><span>${dot(p[2])}${esc(p[0])}</span><span><b>${amt(p[1])}</b> <span class="muted">${Math.round((p[1] / base) * 100)}%</span></span></div>`).join('')}`
+      : '<div class="muted">Add money to your wallet or an investment to see how your wealth is split.</div>';
+    const rows = invs.map((i) => {
+      const v = M.currentValue(i), g = v - M.investedOf(i);
+      return `<div class="mrow" style="--k:#4ade80"><div class="grow" data-act="openInvest" data-id="${i.id}"><div class="m-title">${esc(i.name)}</div><div class="m-sub">${esc(i.type)} · invested ${amt(M.investedOf(i))}</div></div>
+        <div class="m-right"><b>${amt(v)}</b><span class="m-sub ${g >= 0 ? 'good' : 'bad'}">${hidden ? '' : `${g >= 0 ? '+' : '-'}${inr(Math.abs(g))}`}</span></div></div>`;
+    }).join('');
+    const toGet = sum(s.lent.filter((l) => M.lentLeft(l) > 0), M.lentLeft);
+    const toPay = sum(M.datedFor(s).filter((b) => !b.paid), (b) => b.amount);
+    const extra = toGet > 0 || toPay > 0
+      ? `<div class="card"><h2>Not counted above</h2>
+        ${toGet > 0 ? `<div class="row between" style="padding:6px 0"><span>Lent, to get back</span><b class="good">${amt(toGet)}</b></div>` : ''}
+        ${toPay > 0 ? `<div class="row between" style="padding:6px 0"><span>Debts and dated installments to pay</span><b class="bad">${amt(toPay)}</b></div>` : ''}</div>` : '';
+    return `<div class="hero"><div class="label">Total wealth</div><div class="num" ${hidden ? '' : `data-count="${total}"`}>${amt(total)}</div><hr>
+        <div class="grid2"><div><div class="label">Wallet</div><div class="val" style="color:#fff">${amt(wallet)}</div></div>
+        <div><div class="label">Investments</div><div class="val" style="color:#fff">${amt(value)}</div></div></div></div>
+      <div class="card"><h2>Where it is</h2>${alloc}</div>
+      <div class="card"><div class="row between"><h2 style="margin:0">Investments</h2><b class="${gain >= 0 ? 'good' : 'bad'}">${hidden ? mask : `${gain >= 0 ? '+' : '-'}${inr(Math.abs(gain))}`}</b></div>
+        <div class="muted" style="margin:4px 0 10px">Invested ${amt(invested)} · now ${amt(value)}</div>
+        ${rows || '<div class="muted">No investments yet. Add them in the Invest tab.</div>'}</div>
+      ${extra}`;
   }
 
   // the charts themselves are drawn by main.js after render (it owns Chart.js)
@@ -159,12 +198,23 @@ export function createMoney(d) {
     const finished = M.completedEmis(s).filter((x) => x.doneOn && x.doneOn >= addDays(t, -7) && !list.some((b) => b.c.id === x.c.id) && !planned.some((b) => b.c.id === x.c.id));
     const finishedRows = finished.map(({ c, stats }) => `<div class="mrow paid" style="--k:#4ade80"><div class="grow"><div class="m-title">${esc(c.name)}</div>
       <div class="m-sub">All ${stats.total} installments paid</div><div class="m-sub"><span class="good">Completed</span></div></div><div class="m-right"><b>${inr(M.emiTotal(c))}</b></div></div>`).join('');
+    const upcoming = M.upcomingBills(s, m);
+    const upcomingRows = upcoming.map(({ c, due }) => {
+      const e = M.emiStats(c);
+      const count = c.kind === 'loan' && e.total ? ` · ${e.total - e.paid} installment${e.total - e.paid === 1 ? '' : 's'}` : '';
+      return `<div class="mrow" style="--k:${KIND_COLOR[c.kind]}">
+        <div class="grow" data-act="editBill" data-id="${c.id}"><div class="m-title">${esc(c.name)}</div>
+          <div class="m-sub">${KIND_LABEL[c.kind]}${c.person && c.person !== c.name ? ' · ' + esc(c.person) : ''}${count}</div>
+          <div class="m-sub">Starts ${dayName(due)}</div></div>
+        <div class="m-right"><b>${inr(c.amount)}</b></div></div>`;
+    }).join('');
     const history = M.paymentHistory(s).length + M.completedEmis(s).length;
     return `<button class="btn" data-act="addBill">+ Add bill</button>
       <div class="card"><div class="row between"><h2 style="margin:0">${monthName(m)} bills</h2><b>${inr(paidAmt)} / ${inr(total)}</b></div>
         <div class="bar"><div style="width:${total ? (paidAmt / total) * 100 : 0}%"></div></div>
         <div class="muted" style="margin-top:8px">${list.length ? `${left} to pay · ${inr(total - paidAmt)} left this month` : 'Installments, groceries and money for family repeat every month. Add them here.'}</div></div>
       ${rows}
+      ${upcomingRows ? `<div class="day-head"><div><b>Upcoming</b><span>Starts in a coming month</span></div><i>${upcoming.length}</i></div>${upcomingRows}` : ''}
       ${plannedRows ? `<div class="day-head"><div><b>Installments</b><span>On the dates you set</span></div><i>${planned.filter((b) => !b.paid).length}</i></div>${plannedRows}` : ''}
       ${owedRows ? `<div class="day-head"><div><b>Pay back</b><span>One time, on a fixed date</span></div><i>${owed.filter((b) => !b.paid).length}</i></div>${owedRows}` : ''}
       ${finishedRows ? `<div class="day-head"><div><b>Just completed</b><span>Moves to All payments after a week</span></div><i>${finished.length}</i></div>${finishedRows}` : ''}
@@ -300,7 +350,7 @@ export function createMoney(d) {
     md = { cat: edit ? edit.category : 'Food', person: edit ? edit.person || '' : '', mode: edit && edit.mode === 'cash' ? 'cash' : 'online', id: edit ? edit.id : '' };
     openModal(`<h2>${edit ? 'Edit expense' : 'New expense'}</h2>
       <input id="m-amt" type="number" inputmode="decimal" placeholder="Amount ₹" value="${edit ? edit.amount : ''}">
-      <span class="label">Category</span>${chipRow('cat', categories.map((c) => [c, c]), md.cat)}
+      <span class="label">Category</span>${catChips(md.cat)}
       <span class="label">Paid via</span>${chipRow('mode', [['online', 'Online'], ['cash', 'Cash']], md.mode)}
       <span class="label">Paid to (optional)</span>${peopleChips('person', md.person)}
       <input id="m-note" placeholder="Note (optional)" value="${edit ? esc(edit.note || '') : ''}" autocomplete="off">
@@ -330,6 +380,9 @@ export function createMoney(d) {
     return md.insts.map((it, i) => `<div class="inst-row"><input type="date" data-i="${i}" data-f="date" value="${it.date || ''}" aria-label="Installment date"><input type="number" inputmode="decimal" placeholder="₹" data-i="${i}" data-f="amount" value="${it.amount || ''}" aria-label="Installment amount"><button class="icon" data-act="instDel" data-i="${i}" aria-label="Remove">${svg('trash')}</button></div>`).join('');
   }
 
+  // an EMI picks its first installment date instead; debts and plans have their own dates
+  const noDayRow = (k) => k === 'owed' || k === 'plan' || k === 'loan';
+
   function billExtra() {
     const s = S();
     if (md.kind === 'plan') {
@@ -338,7 +391,10 @@ export function createMoney(d) {
         <button class="btn alt sm" style="margin-bottom:14px" data-act="instAdd">+ Add installment</button>
         <span class="label">Already paid before (optional)</span><input id="b-pre" type="number" inputmode="numeric" placeholder="e.g. 1" value="${md.pre || ''}">`;
     }
-    if (md.kind === 'loan') return `<span class="label">Installments (optional)</span>
+    if (md.kind === 'loan') return `<span class="label">First installment date</span>
+      <input id="b-first" type="date" value="${md.first || ''}">
+      <div class="muted" style="margin:-2px 0 14px">The same day repeats every month. Pick a later date if the EMI starts in a coming month.</div>
+      <span class="label">Installments (optional)</span>
       <div class="grid2"><input id="b-total" type="number" inputmode="numeric" placeholder="Total, e.g. 3" value="${md.total || ''}"><input id="b-pre" type="number" inputmode="numeric" placeholder="Already paid, e.g. 2" value="${md.pre || ''}"></div>
       <div class="muted" id="b-emihint" style="margin:-2px 0 14px">${emiHint(md.total, md.pre)}</div>`;
     if (md.kind === 'owed') return `<span class="label">Whom do you owe? (a person or an app)</span>${peopleChips('bperson', md.bperson)}<span class="label">Pay on</span><input id="b-date" type="date" value="${md.date || ''}">`;
@@ -355,6 +411,7 @@ export function createMoney(d) {
       bperson: edit ? edit.person || '' : '', bcat: edit ? edit.category || 'Bills' : 'Groceries', binv: edit ? edit.investmentId || '' : '',
       total: edit ? M.emiStats(edit).total || '' : '', pre: edit && M.emiStats(edit).total ? M.emiStats(edit).paid : '',
       date: edit && edit.dueDate ? edit.dueDate : '',
+      first: edit && edit.kind === 'loan' ? M.dueDate(edit, edit.startMonth || m) : today(),
       insts: edit && edit.kind === 'plan' ? (edit.inst || []).filter((i) => !(edit.paid || {})[i.id]).map((i) => ({ ...i })) : [{ date: '', amount: '' }],
       donePlan: edit && edit.kind === 'plan' ? (edit.inst || []).filter((i) => (edit.paid || {})[i.id]) : [],
     };
@@ -363,7 +420,7 @@ export function createMoney(d) {
       <span class="label">Type</span>${chipRow('kind', BILL_KINDS, md.kind)}
       <input id="b-name" placeholder="Name, e.g. Bike EMI, Groceries, Sister's loan" value="${edit ? esc(edit.name) : ''}" autocomplete="off">
       <div id="b-amtrow" ${md.kind === 'plan' ? 'hidden' : ''}><input id="b-amt" type="number" inputmode="decimal" placeholder="Amount ₹ (per month for repeating bills)" value="${edit && edit.kind !== 'plan' ? edit.amount : ''}"></div>
-      <div id="b-dayrow" ${md.kind === 'owed' || md.kind === 'plan' ? 'hidden' : ''}><span class="label">Due day</span><button class="capsule set" id="b-day" data-act="pickBillDay"><span>${ordinal(md.day)} of every month</span></button></div>
+      <div id="b-dayrow" ${noDayRow(md.kind) ? 'hidden' : ''}><span class="label">Due day</span><button class="capsule set" id="b-day" data-act="pickBillDay"><span>${ordinal(md.day)} of every month</span></button></div>
       <div id="bill-extra">${billExtra()}</div>
       <button class="btn" data-act="saveBill">Save</button>
       ${edit ? '<button class="btn danger" style="margin-top:10px" data-act="delBill">Delete bill</button>' : ''}`);
@@ -532,6 +589,7 @@ export function createMoney(d) {
   }
 
   document.addEventListener('input', (e) => {
+    if (e.target.id === 'b-first') md.first = e.target.value;
     if (e.target.dataset && e.target.dataset.f && md.insts && md.insts[e.target.dataset.i]) md.insts[e.target.dataset.i][e.target.dataset.f] = e.target.value;
     if ((e.target.id === 'b-total' || e.target.id === 'b-pre') && $('b-emihint')) $('b-emihint').textContent = emiHint(($('b-total') || {}).value, ($('b-pre') || {}).value);
   });
@@ -548,8 +606,29 @@ export function createMoney(d) {
         const a = $('m-amt');
         if (a && !a.value && S().settings.salaryAmount) a.value = S().settings.salaryAmount;
       }
-      if (g === 'kind') { $('bill-extra').innerHTML = billExtra(); $('b-dayrow').hidden = v === 'owed' || v === 'plan'; $('b-amtrow').hidden = v === 'plan'; }
+      if (g === 'kind') { $('bill-extra').innerHTML = billExtra(); $('b-dayrow').hidden = noDayRow(v); $('b-amtrow').hidden = v === 'plan'; }
       if (g === 'sipOn') $('sip-box').hidden = v !== 'yes';
+    },
+    // categories you add here are kept in settings.customCats and offered in every expense form and budget list
+    newCat: async () => {
+      const raw = await ui.text('New category', '', 'e.g. Pets, Gym, Gifts');
+      const name = (raw || '').trim().replace(/\s+/g, ' ').slice(0, 20);
+      if (!name) return;
+      const known = getCats().find((c) => c.toLowerCase() === name.toLowerCase());
+      if (!known) { S().settings.customCats.push(name); await db.save(); }
+      md.cat = known || name;
+      const g = $('g-cat');
+      if (g) g.outerHTML = catChips(md.cat);
+    },
+    delCat: async (el) => {
+      const name = el.dataset.c;
+      if (!(await ui.confirm(`Remove "${name}" from the list? Expenses already saved under it stay as they are.`, { title: 'Remove category', ok: 'Remove', danger: true }))) return;
+      const mine = S().settings.customCats;
+      const i = mine.indexOf(name);
+      if (i >= 0) mine.splice(i, 1);
+      delete S().budgets[name];
+      await commit();
+      actions.setBudget();
     },
     newPerson: async (el) => {
       const g = el.dataset.g;
@@ -613,7 +692,8 @@ export function createMoney(d) {
     },
     setBudget: () => {
       const b = S().budgets;
-      openModal(`<h2>Monthly budgets</h2>${categories.map((c) => `<span class="label">${c}</span><input data-bud="${c}" type="number" inputmode="decimal" value="${b[c] || ''}" placeholder="0 = no limit">`).join('')}
+      const mine = S().settings.customCats;
+      openModal(`<h2>Monthly budgets</h2>${getCats().map((c) => `<span class="label">${esc(c)}${mine.includes(c) ? ` <button class="link" data-act="delCat" data-c="${esc(c)}">Remove</button>` : ''}</span><input data-bud="${esc(c)}" type="number" inputmode="decimal" value="${b[c] || ''}" placeholder="0 = no limit">`).join('')}
         <button class="btn" data-act="saveBudget">Save</button>`);
     },
     saveBudget: async () => {
@@ -645,12 +725,18 @@ export function createMoney(d) {
       const total = md.kind === 'loan' ? Math.floor(Number(($('b-total') || {}).value) || 0) : 0;
       let pre = md.kind === 'loan' ? Math.floor(Number(($('b-pre') || {}).value) || 0) : 0;
       if (total && pre >= total) return ui.alert('Already paid must be less than the total installments.');
+      // an EMI starts on the date picked here (this month or a coming one)
+      const first = md.kind === 'loan' ? ($('b-first') || {}).value || '' : '';
+      if (md.kind === 'loan') {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(first)) return ui.alert('Pick the date of the first installment');
+        if (first.slice(0, 7) < cur && !(old && old.startMonth === first.slice(0, 7))) return ui.alert('Pick a date from this month onward. Installments you already paid go in "Already paid".');
+      }
       // installments paid inside Prysm are counted from the payments themselves, the rest were paid before
       const inApp = old ? M.emiStats({ ...old, paidBefore: 0 }).paid : 0;
       pre = Math.max(0, pre - inApp);
       const c = {
         ...(old || { id: db.uid(), paid: {}, active: true, startMonth: md.day < Number(today().slice(8)) ? M.shiftMonth(cur, 1) : cur }),
-        kind: md.kind, name, amount, dueDay: md.day,
+        kind: md.kind, name, amount, dueDay: first ? Number(first.slice(8)) : md.day,
         person: md.kind === 'family' || md.kind === 'owed' ? md.bperson : '',
         dueDate: date || '',
         category: md.kind === 'fixed' ? md.bcat : '',
@@ -658,6 +744,7 @@ export function createMoney(d) {
         total,
         paidBefore: total ? pre : 0,
       };
+      if (first) c.startMonth = first.slice(0, 7);
       c.endMonth = total ? M.shiftMonth(c.startMonth || cur, total - c.paidBefore - 1) : '';
       if (md.bperson) addPerson(md.bperson);
       if (old) Object.assign(old, c); else S().commitments.push(c);
