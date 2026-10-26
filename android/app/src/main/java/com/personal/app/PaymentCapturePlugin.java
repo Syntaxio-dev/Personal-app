@@ -218,6 +218,42 @@ public class PaymentCapturePlugin extends Plugin {
         call.resolve();
     }
 
+    // ---------- steps (Fitness mode) ----------
+    /** Whether this phone has a step counter and whether Prysm may read it ("Physical activity" on Android 10+). */
+    @PluginMethod
+    public void stepsStatus(PluginCall call) {
+        JSObject r = new JSObject();
+        r.put("supported", StepCounter.supported(getContext()));
+        r.put("granted", StepCounter.granted(getContext()));
+        call.resolve(r);
+    }
+
+    /** Shows Android's own permission dialog; the page looks again afterwards with stepsStatus. */
+    @PluginMethod
+    public void requestSteps(PluginCall call) {
+        try {
+            if (Build.VERSION.SDK_INT >= 29 && !StepCounter.granted(getContext()) && getActivity() != null) {
+                androidx.core.app.ActivityCompat.requestPermissions(getActivity(), new String[]{android.Manifest.permission.ACTIVITY_RECOGNITION}, 4310);
+            }
+        } catch (Exception ignored) {
+            // the page reports "still off" if nothing was shown
+        }
+        call.resolve();
+    }
+
+    /** Takes a fresh reading, then returns every day's total: { days: { "2026-10-26": 7421 } }. */
+    @PluginMethod
+    public void getSteps(final PluginCall call) {
+        StepCounter.sample(getContext(), new Runnable() {
+            @Override
+            public void run() {
+                JSObject r = new JSObject();
+                r.put("days", StepCounter.days(getContext()));
+                call.resolve(r);
+            }
+        });
+    }
+
     // ---------- a small buzz ----------
     /** A short haptic tick through the phone's own engine (no permission; the phone's touch-feedback setting is respected). */
     @PluginMethod

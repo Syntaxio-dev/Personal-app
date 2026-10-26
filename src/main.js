@@ -21,6 +21,7 @@ import { createMoney } from './moneyui.js';
 import * as G from './goals.js';
 import { createGoals } from './goalsui.js';
 import { createScreen } from './screenui.js';
+import { createFitness } from './fitnessui.js';
 import { pad, dateStr, today, addDays, daysBetween, dayName, dayLabel, fmtTime } from './dates.js';
 import { syncNotifications, initNotifications, planTime, exactAlarmsAllowed, openExactAlarmSettings, NAG_SLOTS, setNativePlan, setSyncHook, testReminder } from './notify.js';
 
@@ -77,11 +78,27 @@ const ICON = {
   eyeoff: '<path d="M4 4l16 16M9.9 5.8A9.7 9.7 0 0112 5.5c6 0 9.5 6.5 9.5 6.5a16 16 0 01-3 3.7M6.4 7.6A16 16 0 002.5 12S6 18.5 12 18.5c1.6 0 3-.4 4.2-1M9.9 9.9a2.8 2.8 0 003.9 3.9"/>',
   up: '<path d="M6 14l6-6 6 6"/>',
   down: '<path d="M6 10l6 6 6-6"/>',
+  // Fitness mode
+  fwork: '<path d="M6.5 6.5v11M17.5 6.5v11M3.5 9v6M20.5 9v6M6.5 12h11"/>',
+  fhome: '<path d="M13 3L5 14h6l-1 7 8-11h-6z"/>',
+  fcal: '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/><circle cx="8.5" cy="15" r="1"/><circle cx="12" cy="15" r="1"/><circle cx="15.5" cy="15" r="1"/>',
+  play: '<path d="M8.5 5.5v13l10.5-6.5z"/>',
+  camera: '<path d="M4 8h3l1.5-2h7L17 8h3v11H4z"/><circle cx="12" cy="13.5" r="3.2"/>',
+  more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+  medal: '<circle cx="12" cy="14.5" r="5.5"/><path d="M8.5 3.5l2 5.5M15.5 3.5l-2 5.5M12 12l1 2 2.2.3-1.6 1.5.4 2.2-2-1.1-2 1.1.4-2.2-1.6-1.5 2.2-.3z"/>',
+  fsteps: '<circle cx="14" cy="4.5" r="1.8"/><path d="M9.5 21l2.5-6.5 3 2.5v4M12 14.5l-1-5 3-1.5 2.5 3 3 .5M10 10l-3.5 1.5"/>',
 };
 const svg = (k) => `<svg viewBox="0 0 24 24">${ICON[k]}</svg>`;
 const APP_VERSION = pkg.version.split('.').slice(0, 2).join('.');
-const TAB_ORDER = ['home', 'money', 'att', 'todo', 'goals'];
 const TABS = [['home', 'Dashboard'], ['money', 'Money'], ['att', 'Attendance'], ['todo', 'Tasks'], ['goals', 'Goals']];
+// Fitness mode (v2.0) has its own tab bar and its own look (blue accent, see style.css). 'fset' is its settings page.
+const FTABS = [['fhome', 'Today'], ['fwork', 'Workout'], ['fcal', 'Calendar'], ['fsteps', 'Steps']];
+// 'frout' (a routine), 'fredit' (the routine editor) and 'fset' are pages inside Fitness mode, not tabs
+const FPAGES = ['fset', 'frout', 'fredit'];
+const isFit = (t) => FPAGES.includes(t) || FTABS.some((x) => x[0] === t);
+const tabList = () => (isFit(tab) ? FTABS : TABS);
+const tabOrder = () => tabList().map((x) => x[0]);
+const homeOf = () => (isFit(tab) ? 'fhome' : 'home');
 const DASH_WIDGETS = {
   wallet: { name: 'Wallet', desc: 'Balance and safe to spend' },
   quick: { name: 'Shortcuts', desc: 'Add an expense, income or task' },
@@ -511,8 +528,22 @@ const screenUi = createScreen({
   syncNotifications: () => syncNotifications(),
 });
 
+// Fitness mode. window.__fitPlugin is a test hook (a fake phone for the step counter), never set in the app.
+const fitnessUi = createFitness({
+  ui, openModal, closeModal, commit, render: (a) => render(a), esc, svg, dot, buzz, pickTime: (o) => pickTime(o),
+  syncNotifications: () => syncNotifications(), plugin: window.__fitPlugin || PaymentCapture, isNative: !!window.__fitPlugin || Capacitor.isNativePlatform(),
+  openTab: (t) => { tab = t; window.scrollTo(0, 0); render('fade'); },
+});
+
 // ---------- views ----------
 const views = {
+  fhome: () => fitnessUi.today(),
+  fwork: () => fitnessUi.work(),
+  fcal: () => fitnessUi.cal(),
+  fsteps: () => fitnessUi.steps(),
+  fset: () => fitnessUi.settings(),
+  frout: () => fitnessUi.routine(),
+  fredit: () => fitnessUi.edit(),
   home() {
     const st = db.get().settings;
     const widgets = st.dashOrder.filter((id) => !st.dashHidden.includes(id)).map(dashWidget).join('');
@@ -1302,6 +1333,16 @@ const actions = {
 Object.assign(actions, moneyUi.actions);
 Object.assign(actions, goalsUi.actions);
 Object.assign(actions, screenUi.actions);
+Object.assign(actions, fitnessUi.actions);
+// the header button: Life <-> Fitness. The look changes with the mode (data-mode on <html>, see render()).
+actions.setMode = (el) => {
+  tab = el.dataset.mode === 'fit' ? 'fhome' : 'home';
+  window.scrollTo(0, 0);
+  if (!reduceMotion()) { document.body.classList.add('mode-swap'); setTimeout(() => document.body.classList.remove('mode-swap'), 450); }
+  buzz('tick');
+  render('fade');
+};
+actions.openFitSettings = () => { tab = 'fset'; window.scrollTo(0, 0); render('next'); };
 actions.goScreen = () => { tab = 'screen'; window.scrollTo(0, 0); render('next'); screenUi.sync(true).then((changed) => { if (changed && tab === 'screen' && $('modal').hidden) render(); }); };
 
 document.addEventListener('click', (e) => {
@@ -1317,9 +1358,10 @@ document.addEventListener('change', (e) => {
 
 // ---------- navigation: buttons and swipe ----------
 function go(next) {
-  if (next === tab || !TAB_ORDER.includes(next)) return;
-  const from = TAB_ORDER.indexOf(tab);
-  const dir = from === -1 || TAB_ORDER.indexOf(next) < from ? 'prev' : 'next';
+  const order = isFit(next) ? FTABS.map((x) => x[0]) : TABS.map((x) => x[0]);
+  if (next === tab || !order.includes(next)) return;
+  const from = order.indexOf(tab);
+  const dir = from === -1 || order.indexOf(next) < from ? 'prev' : 'next';
   tab = next;
   window.scrollTo(0, 0);
   render(dir);
@@ -1349,12 +1391,13 @@ document.addEventListener('touchstart', (e) => {
   touch = blocked || t.clientX < edge || t.clientX > window.innerWidth - edge || e.touches.length > 1 ? null : { x: t.clientX, y: t.clientY, t: Date.now() };
 }, { passive: true });
 document.addEventListener('touchend', (e) => {
-  if (!touch || !TAB_ORDER.includes(tab)) return;
+  const order = tabOrder();
+  if (!touch || !order.includes(tab)) return;
   const t = e.changedTouches[0];
   const dx = t.clientX - touch.x, dy = t.clientY - touch.y, dt = Date.now() - touch.t;
   touch = null;
   if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.8 || dt > 700) return;
-  go(TAB_ORDER[TAB_ORDER.indexOf(tab) + (dx < 0 ? 1 : -1)]);
+  go(order[order.indexOf(tab) + (dx < 0 ? 1 : -1)]);
 }, { passive: true });
 
 // ---------- swipe a row: right = done, left = delete (with undo) ----------
@@ -1430,20 +1473,32 @@ document.addEventListener('touchcancel', finishSwipe, { passive: true });
 // ---------- shell ----------
 // anim: 'up' | 'next' | 'prev' | 'fade' | undefined (no animation, e.g. after ticking a task)
 function render(anim) {
-  const subPage = tab === 'settings' || tab === 'screen';
-  const title = tab === 'settings' ? 'Settings' : tab === 'screen' ? 'Screen time' : TABS.find((t) => t[0] === tab)[1];
-  $('top').innerHTML = `<div class="row">${subPage ? `<button class="icon back" data-act="goto" data-tab="home" aria-label="Back">${svg('prev')}</button>` : ''}<h1>${title}</h1></div>
-    <div class="row"><span class="date">${new Date().toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}</span>${subPage ? '' : `<button class="icon gear" data-act="openSettings" aria-label="Settings">${svg('gear')}</button>`}</div>`;
+  const fit = isFit(tab);
+  // the whole look follows the mode: purple in Life, blue in Fitness (tokens in style.css). Remember it for the next start.
+  document.documentElement.dataset.mode = fit ? 'fit' : 'life';
+  if (db.get().settings.mode !== (fit ? 'fit' : 'life')) { db.get().settings.mode = fit ? 'fit' : 'life'; db.save(); }
+  const subPage = tab === 'settings' || tab === 'screen' || FPAGES.includes(tab);
+  const title = tab === 'settings' ? 'Settings' : tab === 'screen' ? 'Screen time' : FPAGES.includes(tab) ? fitnessUi.title(tab) : tabList().find((t) => t[0] === tab)[1];
+  const modeBtn = fit
+    ? `<button class="icon modesw" data-act="setMode" data-mode="life" aria-label="Back to Life mode">${svg('home')}</button>`
+    : `<button class="icon modesw" data-act="setMode" data-mode="fit" aria-label="Open Fitness mode">${svg('fwork')}</button>`;
+  const gearBtn = `<button class="icon gear" data-act="${fit ? 'openFitSettings' : 'openSettings'}" aria-label="Settings">${svg('gear')}</button>`;
+  $('top').innerHTML = `<div class="row">${subPage ? `<button class="icon back" data-act="${fit ? 'fGo' : 'goto'}" data-tab="${fit ? fitnessUi.backOf(tab) : homeOf()}" aria-label="Back">${svg('prev')}</button>` : ''}<h1>${esc(title)}</h1></div>
+    <div class="row"><span class="date">${new Date().toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}</span>${subPage ? '' : modeBtn + gearBtn}</div>`;
   const view = $('view');
   view.className = '';
   view.dataset.tab = tab;
-  view.innerHTML = views[tab]();
+  // a running workout shows as a thin bar on the other Fitness tabs
+  view.innerHTML = (['fhome', 'fcal', 'fsteps'].includes(tab) ? fitnessUi.mini() : '') + views[tab]();
   if (anim && !reduceMotion()) {
     [...view.children].forEach((c, i) => c.style.setProperty('--i', Math.min(i, 7)));
     view.className = 'fx-' + anim;
   }
-  const badge = tabBadges();
-  $('tabs').innerHTML = TABS.map(([k, l]) => `<button class="${k === tab ? 'on' : ''}" data-act="goto" data-tab="${k}">${svg(k)}${l}${badge[k] ? '<i class="tb" aria-label="Needs you"></i>' : ''}</button>`).join('');
+  // a scrolling sub-tab row (Money) opens on the tab you are in, so Lent or Report are never hidden off to the side
+  const activeSub = view.querySelector('.chips.subtabs.scroll .on');
+  if (activeSub) { const row = activeSub.parentElement; const a = activeSub.getBoundingClientRect(), r = row.getBoundingClientRect(); row.scrollLeft = Math.max(0, row.scrollLeft + (a.left - r.left) - (r.width - a.width) / 2); }
+  const badge = fit ? { fwork: fitnessUi.badge() } : tabBadges();
+  $('tabs').innerHTML = tabList().map(([k, l]) =>`<button class="${k === (FPAGES.includes(tab) && tab !== 'fset' ? 'fwork' : tab) ? 'on' : ''}" data-act="goto" data-tab="${k}">${svg(k)}${l}${badge[k] ? '<i class="tb" aria-label="Needs you"></i>' : ''}</button>`).join('');
   charts.forEach((ch) => ch.destroy());
   charts = [];
   if (tab === 'money' && moneyUi.getTab() === 'report') drawMoneyReport();
@@ -1451,6 +1506,7 @@ function render(anim) {
   if (tab === 'att') drawAttCharts();
   if (tab === 'goals' && goalsUi.getTab() === 'journal' && $('j-chart')) drawJournalChart();
   if (tab === 'screen') { screenUi.draw(Chart, charts, { gradient }); screenUi.afterRender(); }
+  if (fit) { fitnessUi.draw(Chart, charts, { gradient }); fitnessUi.afterRender(); }
   if (anim) countUp();
 }
 
@@ -1473,6 +1529,7 @@ function openFromNotification(extra) {
   else if (extra.type === 'goalReview') { tab = 'goals'; goalsUi.setTab('goals'); render('up'); goalsUi.checkDue({ force: true }); }
   else if (extra.type === 'goalCheck') { tab = 'goals'; goalsUi.setTab('goals'); render('up'); }
   else if (extra.type === 'bucket') { tab = 'goals'; goalsUi.setTab('bucket'); render('up'); }
+  else if (extra.type === 'fitRest' || extra.type === 'fitRemind') { tab = 'fwork'; window.scrollTo(0, 0); render('up'); }
   else if (extra.type === 'screen') { tab = 'screen'; window.scrollTo(0, 0); render('up'); screenUi.sync(true).then((changed) => { if (changed && tab === 'screen' && $('modal').hidden) render(); }); }
 }
 
@@ -1506,6 +1563,8 @@ async function onResume() {
   if (purgeDone()) await db.save();
   const screenChanged = await screenUi.sync(true);
   if (screenChanged && (tab === 'home' || tab === 'screen') && $('modal').hidden && $('dialog').hidden) render();
+  const stepsChanged = await fitnessUi.sync();
+  if (stepsChanged && (tab === 'fhome' || tab === 'fsteps') && $('modal').hidden && $('dialog').hidden) render();
   await syncPayments();
   syncNotifications();
   goalsUi.checkDue({ force: true });
@@ -1522,6 +1581,8 @@ db.init().then(async () => {
   }
   await ensureAttStart();
   await initNotifications();
+  // open in the mode the app was left in
+  if (db.get().settings.mode === 'fit') tab = 'fhome';
   render('up');
   listenForNotifications();
   // on the phone syncPayments asks too; this makes the SIP question work everywhere
@@ -1536,6 +1597,13 @@ db.init().then(async () => {
   setInterval(() => {
     if (document.hidden || (tab !== 'home' && tab !== 'screen')) return;
     screenUi.sync().then((changed) => { if (changed && $('modal').hidden && $('dialog').hidden) render(); });
+  }, 60000);
+  // steps: the phone counts them, this reads the totals at start, on resume and each minute while a steps screen is open
+  const stepsShown = () => tab === 'fhome' || tab === 'fsteps';
+  fitnessUi.sync().then((changed) => { if (changed && stepsShown() && $('modal').hidden) render(); });
+  setInterval(() => {
+    if (document.hidden || !stepsShown()) return;
+    fitnessUi.sync().then((changed) => { if (changed && $('modal').hidden && $('dialog').hidden) render(); });
   }, 60000);
   setTimeout(firstRun, 1200);
 }).catch((e) => { document.body.textContent = 'Database error: ' + e.message; });

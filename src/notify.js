@@ -2,6 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import * as db from './db.js';
 import { addDays, fmtTime, today } from './dates.js';
+import { reminderDates } from './fitness.js';
 import { billActive, datedFor, dueDate, lentLeft, salaryAdded, salaryDate, shiftMonth } from './money.js';
 
 const CHANNEL = 'prysm';
@@ -191,6 +192,17 @@ export async function syncNotifications() {
     if (st.windDownOn !== false && sleepLock && sleepLock.on) {
       const { hour, minute } = windDownTime(sleepLock.from);
       list.push({ id: 8, channelId: CHANNEL, title: `Sleep lock in ${WIND_LEAD} minutes`, body: `Finish what you are doing. Your apps lock at ${fmtTime(sleepLock.from)}.`, schedule: { on: { hour, minute }, allowWhileIdle: true }, extra: { type: 'screen' } });
+    }
+
+    // fitness: the end of the rest between sets (only while a workout is running), and a reminder on each day not yet trained
+    const fit = S.fitness;
+    if (fit) {
+      if (fit.active && fit.active.restUntil > now.getTime()) {
+        list.push({ id: 9, channelId: CHANNEL, title: 'Rest is over', body: 'Time for your next set.', schedule: { at: new Date(fit.active.restUntil), allowWhileIdle: true }, extra: { type: 'fitRest' } });
+      }
+      reminderDates(fit, todayStr, now.getTime()).forEach((date) => {
+        list.push({ id: hash('fw' + date), channelId: CHANNEL, title: 'Time to train', body: `${st.name ? st.name + ', your' : 'Your'} workout is waiting. Even a short one counts.`, schedule: { at: at(date, fit.settings.remindAt), allowWhileIdle: true }, extra: { type: 'fitRemind' } });
+      });
     }
 
     // every reminder carries the Prysm logo as its large icon (phones keep showing an old app icon they saved earlier)

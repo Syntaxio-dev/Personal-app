@@ -161,4 +161,7 @@
     <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
     <!-- optional: granted once from a computer (adb shell pm grant), lets Prysm switch its own accessibility service back on -->
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" tools:ignore="ProtectedPermissions" />
+    <!-- Fitness mode: steps come from the phone's own step counter (Android 10+ asks for "Physical activity") -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <uses-feature android:name="android.hardware.sensor.stepcounter" android:required="false" />
 </manifest>

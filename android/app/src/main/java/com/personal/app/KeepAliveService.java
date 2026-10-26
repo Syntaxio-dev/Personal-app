@@ -26,6 +26,7 @@ public class KeepAliveService extends Service {
     private static final int ID = 4200;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private int ticks = 0;
     private final Runnable watch = new Runnable() {
         @Override
         public void run() {
@@ -33,6 +34,12 @@ public class KeepAliveService extends Service {
                 ScreenTime.watchdog(KeepAliveService.this);
             } catch (Exception ignored) {
                 // the watchdog must never take the service down
+            }
+            try {
+                // Fitness mode: a step reading now and then (every ten minutes), so each day's total stays right
+                if (ticks++ % 10 == 0) StepCounter.sample(KeepAliveService.this, null);
+            } catch (Exception ignored) {
+                // steps are a bonus; they must never take the service down
             }
             handler.postDelayed(this, 60000);
         }
