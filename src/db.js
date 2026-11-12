@@ -2,6 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
 import { cleanSl, FOCUS_MAX } from './screen.js';
 import { emptyFitness, cleanFitness } from './fitness.js';
+import { cleanEvents } from './events.js';
 
 const LS_KEY = 'personal-app-state';
 let conn = null;
@@ -11,10 +12,10 @@ export const DASH_IDS = ['wallet', 'quick', 'tasks', 'goals', 'attendance', 'bil
 
 const empty = () => ({
   settings: {
-    salary: 0, name: '', sleep: '23:00', planLead: 30, planOn: true, remindOn: true, nagOn: true, askedNotif: false, askedExact: false, weekOff: [0], attStart: '',
+    salary: 0, name: '', sleep: '23:00', planLead: 30, planOn: true, remindOn: true, nagOn: true, nagPerDay: 2, askedNotif: false, askedExact: false, weekOff: [0], attStart: '',
     salaryDay: 11, salaryAmount: 0, openingBalance: 0, salaryOn: true, billOn: true, weeklyOn: true, backupOn: true,
     dashOrder: ['wallet', 'quick', 'tasks', 'goals', 'attendance', 'bills', 'bucket', 'screen'], dashHidden: [],
-    goalCheckOn: true, dreamOn: true, dreamPick: null, keepAlive: true, haptics: true, hideBalance: false, lastBackup: 0, streakSeen: {}, windDownOn: true, customCats: [], setupSnooze: 0,
+    goalCheckOn: true, dreamOn: true, dreamPick: null, keepAlive: true, haptics: true, hideBalance: false, lastBackup: 0, balanceResets: [], streakSeen: {}, windDownOn: true, customCats: [], setupSnooze: 0,
     mode: 'life',
   },
   transactions: [],
@@ -34,6 +35,7 @@ const empty = () => ({
   sleepLock: null,
   focus: { active: null, log: [] },
   fitness: emptyFitness(),
+  events: [],
 });
 
 // New fields get defaults here, so data saved by older versions of the app still loads.
@@ -55,6 +57,7 @@ const normalize = (s) => {
   if (!Array.isArray(out.settings.customCats)) out.settings.customCats = [];
   out.settings.mode = out.settings.mode === 'fit' ? 'fit' : 'life';
   out.fitness = cleanFitness(out.fitness);
+  out.events = cleanEvents(out.events);
   delete out.settings.screenStrict;
   return out;
 };
@@ -161,6 +164,7 @@ function sanitize(s) {
     log: list(fo.log).filter((e) => num(e.s) > 0 && num(e.m) > 0).map((e) => ({ s: num(e.s), e: num(e.e), m: Math.round(num(e.m)), l: str(e.l).slice(0, 40) })).slice(-300),
   };
   s.fitness = cleanFitness(s.fitness);
+  s.events = cleanEvents(s.events);
   s.settings.mode = s.settings.mode === 'fit' ? 'fit' : 'life';
   const seen = {};
   Object.entries(s.settings.streakSeen && typeof s.settings.streakSeen === 'object' ? s.settings.streakSeen : {}).forEach(([k, v]) => { if (/^[\w-]{1,64}$/.test(k) && num(v) > 0) seen[k] = Math.round(num(v)); });
@@ -174,6 +178,7 @@ function sanitize(s) {
   ['salary', 'salaryDay', 'salaryAmount', 'openingBalance', 'planLead', 'lastBackup', 'setupSnooze'].forEach((k) => { s.settings[k] = num(s.settings[k]); });
   s.settings.haptics = s.settings.haptics !== false;
   s.settings.hideBalance = !!s.settings.hideBalance;
+  s.settings.balanceResets = (Array.isArray(s.settings.balanceResets) ? s.settings.balanceResets : []).map((r) => ({ ts: num(r && r.ts), from: num(r && r.from), to: num(r && r.to) })).filter((r) => r.ts > 0).slice(-20);
   const seenCat = new Set();
   s.settings.customCats = (Array.isArray(s.settings.customCats) ? s.settings.customCats : []).map((c) => str(c).trim().slice(0, 20)).filter((c) => c && !seenCat.has(c.toLowerCase()) && seenCat.add(c.toLowerCase())).slice(0, 40);
   if (!s.settings.salaryDay) s.settings.salaryDay = 11;

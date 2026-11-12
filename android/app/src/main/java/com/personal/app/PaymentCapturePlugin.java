@@ -352,6 +352,21 @@ public class PaymentCapturePlugin extends Plugin {
         }
     }
 
+    /** The page of the small "Prysm is running" notification, so it can be hidden (the service keeps working without it showing). */
+    @PluginMethod
+    public void openRunningNotificationSettings(PluginCall call) {
+        try {
+            Intent i = new Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, getContext().getPackageName())
+                    .putExtra(Settings.EXTRA_CHANNEL_ID, "prysm_running");
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(i);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("Could not open the notification settings", e);
+        }
+    }
+
     // ---------- screen time ----------
     @PluginMethod
     public void screenStatus(PluginCall call) {
@@ -367,6 +382,70 @@ public class PaymentCapturePlugin extends Plugin {
         r.put("secure", ScreenTime.secureGranted(ctx));
         r.put("running", PrysmAccessibilityService.instance != null);
         call.resolve(r);
+    }
+
+    // ---------- payment-safe pause (see PaySafe) ----------
+    private JSObject paySafeState(Context ctx, java.util.List<String> refused) {
+        android.content.pm.PackageManager pm = ctx.getPackageManager();
+        JSObject r = new JSObject();
+        r.put("on", PaySafe.on(ctx));
+        r.put("secure", ScreenTime.secureGranted(ctx));
+        r.put("usage", ScreenTime.hasUsageAccess(ctx));
+        r.put("paused", PaySafe.paused(ctx));
+        JSArray builtIn = new JSArray();
+        for (String p : PaySafe.BUILT_IN) {
+            try {
+                pm.getApplicationInfo(p, 0); // only the ones that are installed
+                JSObject o = new JSObject();
+                o.put("pkg", p);
+                o.put("name", ScreenTime.labelOf(ctx, p));
+                builtIn.put(o);
+            } catch (Exception ignored) {
+                // not installed
+            }
+        }
+        r.put("builtIn", builtIn);
+        JSArray custom = new JSArray();
+        for (String p : PaySafe.custom(ctx)) {
+            JSObject o = new JSObject();
+            o.put("pkg", p);
+            o.put("name", ScreenTime.labelOf(ctx, p));
+            custom.put(o);
+        }
+        r.put("custom", custom);
+        JSArray ref = new JSArray();
+        if (refused != null) for (String p : refused) {
+            JSObject o = new JSObject();
+            o.put("pkg", p);
+            o.put("name", ScreenTime.labelOf(ctx, p));
+            o.put("why", PaySafe.refusal(ctx, p));
+            ref.put(o);
+        }
+        r.put("refused", ref);
+        return r;
+    }
+
+    @PluginMethod
+    public void getPaySafe(PluginCall call) {
+        Context ctx = getContext();
+        try {
+            PaySafe.tick(ctx); // ends a pause that went stale (restart, killed process)
+        } catch (Exception ignored) {
+            // just a status read
+        }
+        call.resolve(paySafeState(ctx, null));
+    }
+
+    /** { on: boolean, custom: [pkg] }. Apps a limit, the sleep lock or a focus session covers are refused. */
+    @PluginMethod
+    public void setPaySafe(PluginCall call) {
+        Context ctx = getContext();
+        try {
+            java.util.List<String> refused = PaySafe.save(ctx, Boolean.TRUE.equals(call.getBoolean("on", false)), call.getArray("custom", new JSArray()));
+            call.resolve(paySafeState(ctx, refused));
+        } catch (Exception e) {
+            call.reject("Could not save the payment-safe list", e);
+        }
     }
 
     /** The last things the blocking service did (started, stopped, caught a retry), newest last. */

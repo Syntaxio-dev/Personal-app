@@ -392,6 +392,15 @@ public class PrysmAccessibilityService extends AccessibilityService {
     }
 
     private void onForeground(String pkg, boolean browser) {
+        // a chosen payment app is in front: Prysm's service switches itself off for the payment (see PaySafe)
+        try {
+            if (PaySafe.begin(this, pkg)) {
+                accrue();
+                return;
+            }
+        } catch (Exception ignored) {
+            // never let this disturb blocking
+        }
         accrue();
         if (blockView != null && !pkg.equals(blockPkg)) removeBlock();
         boolean changed = !pkg.equals(fgPkg);

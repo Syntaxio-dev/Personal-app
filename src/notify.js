@@ -3,9 +3,13 @@ import { LocalNotifications } from '@capacitor/local-notifications';
 import * as db from './db.js';
 import { addDays, fmtTime, today } from './dates.js';
 import { reminderDates } from './fitness.js';
+import { reminderPlan } from './events.js';
 import { billActive, datedFor, dueDate, lentLeft, salaryAdded, salaryDate, shiftMonth } from './money.js';
 
 const CHANNEL = 'prysm';
+// Low-value notices (weekly summary, backup, check-ins, dreams, wind-down) go to a quiet channel: no sound, no pop-up,
+// they just wait in the shade. Things with a consequence (tasks, bills, goal reviews) stay on the loud channel.
+const QUIET = 'prysm_quiet';
 const LOGO = 'prysm_notif'; // drawable-nodpi/prysm_notif.png, the Prysm logo (see scripts/make-icons.mjs)
 
 // On the phone the nightly planner is a native popup (see PlanScheduler.java); main.js turns this on and
@@ -15,14 +19,26 @@ let syncHook = null;
 export const setNativePlan = (on) => { nativePlan = on; };
 export const setSyncHook = (fn) => { syncHook = fn; };
 
-// Overdue tasks (2+ days old) nag at these times, every day, until they are done.
-export const NAG_SLOTS = ['09:00', '13:00', '17:00', '21:00'];
+// Overdue tasks (2+ days old) nag every day until they are done, as ONE notice for all of them (never one per task).
+// How many times a day is a setting (1, 2 or 4).
+export const NAG_SETS = { 1: ['10:00'], 2: ['09:00', '17:00'], 4: ['09:00', '13:00', '17:00', '21:00'] };
+export const NAG_SLOTS = NAG_SETS[4];
+export const nagSlots = (st) => NAG_SETS[Number(st.nagPerDay)] || NAG_SETS[2];
 const NAG_TEXT = [
   (t) => `Still pending: "${t}". Get it done today.`,
   (t) => `"${t}" is overdue. Even 10 minutes counts, start now.`,
   (t) => `"${t}" has been waiting for days. Finish it.`,
   (t) => `Last call today: "${t}". Don't carry it into tomorrow.`,
 ];
+const nagBody = (titles, i) => (titles.length === 1 ? NAG_TEXT[i % NAG_TEXT.length](titles[0]) : `${titles.length} tasks are overdue: "${titles[0]}" and ${titles.length - 1} more. Pick one and start.`);
+
+// next Saturday 20:00 at or after `from`
+function nextSaturdayEvening(from) {
+  const d = new Date(from);
+  d.setHours(20, 0, 0, 0);
+  while (d.getDay() !== 6 || d < from) d.setDate(d.getDate() + 1);
+  return d;
+}
 
 const hash = (s) => (Math.abs([...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 7)) % 2000000000) + 100;
 const at = (date, hm) => new Date(`${date}T${hm}`);
@@ -52,7 +68,8 @@ export function windDownTime(from) {
 export async function initNotifications() {
   if (!Capacitor.isNativePlatform()) return;
   try {
-    await LocalNotifications.createChannel({ id: CHANNEL, name: 'Prysm reminders', description: 'Task reminders, night planning and overdue alerts', importance: 5, visibility: 1, vibration: true });
+    await LocalNotifications.createChannel({ id: CHANNEL, name: 'Prysm reminders', description: 'Task reminders, bills, overdue alerts and goal reviews', importance: 5, visibility: 1, vibration: true });
+    await LocalNotifications.createChannel({ id: QUIET, name: 'Prysm quiet notices', description: 'Weekly summary, backup, check-ins and dream reminders. No sound, no pop-up', importance: 2, visibility: 1, vibration: false });
   } catch (e) { /* channel is best-effort */ }
 }
 
@@ -95,13 +112,23 @@ export async function syncNotifications() {
         const when = at(x.date, x.time);
         if (when > now) list.push({ id: hash(x.id), channelId: CHANNEL, title: 'Task reminder', body: x.title, schedule: { at: when, allowWhileIdle: true }, extra: { type: 'task', id: x.id } });
       }
-      if (st.nagOn) {
-        NAG_SLOTS.forEach((slot, i) => {
-          const first = nextOccurrence(at(addDays(x.date, 2), slot), now);
-          list.push({ id: hash(x.id + 'n' + i), channelId: CHANNEL, title: 'Overdue task', body: NAG_TEXT[i](x.title), schedule: { at: first, repeats: true, every: 'day', allowWhileIdle: true }, extra: { type: 'nag', id: x.id } });
-        });
+      // a task that becomes urgent in the coming days still gets one notice on its first urgent day (the digest below takes over on the next sync)
+      if (st.nagOn && addDays(x.date, 2) > today()) {
+        const first = at(addDays(x.date, 2), nagSlots(st)[0]);
+        if (first > now) list.push({ id: hash(x.id + 'n0'), channelId: CHANNEL, title: 'Overdue task', body: NAG_TEXT[0](x.title), schedule: { at: first, allowWhileIdle: true }, extra: { type: 'nag', id: x.id } });
       }
     });
+    // overdue tasks (2+ days late): one digest per slot, however many tasks there are
+    if (st.nagOn) {
+      const urgent = S.todos.filter((x) => !x.done && addDays(x.date, 2) <= today());
+      if (urgent.length) {
+        const titles = urgent.map((x) => x.title);
+        nagSlots(st).forEach((slot, i) => {
+          const first = nextOccurrence(at(today(), slot), now);
+          list.push({ id: hash('nag-digest' + i), channelId: CHANNEL, title: urgent.length === 1 ? 'Overdue task' : 'Overdue tasks', body: nagBody(titles, i), schedule: { at: first, repeats: true, every: 'day', allowWhileIdle: true }, extra: { type: 'nag', id: urgent[0].id } });
+        });
+      }
+    }
 
     const todayStr = today();
     const m0 = todayStr.slice(0, 7);
@@ -156,8 +183,13 @@ export async function syncNotifications() {
     });
 
     // weekly nudges (Sunday = 1 ... Saturday = 7)
-    if (st.weeklyOn) list.push({ id: 3, channelId: CHANNEL, title: 'Your week in money', body: 'Tap to see where your money went this week.', schedule: { on: { weekday: 1, hour: 19, minute: 0 }, allowWhileIdle: true }, extra: { type: 'weekly' } });
-    if (st.backupOn) list.push({ id: 4, channelId: CHANNEL, title: 'Back up your data', body: 'Your data lives only on this phone. Export a backup and send it to yourself.', schedule: { on: { weekday: 7, hour: 20, minute: 0 }, allowWhileIdle: true }, extra: { type: 'backup' } });
+    if (st.weeklyOn) list.push({ id: 3, channelId: QUIET, title: 'Your week in money', body: 'Tap to see where your money went this week.', schedule: { on: { weekday: 1, hour: 19, minute: 0 }, allowWhileIdle: true }, extra: { type: 'weekly' } });
+    // backup: only once a week has passed since the last one, a single notice on the next Saturday evening (never right after a backup)
+    const records = S.transactions.length + S.todos.length + S.goals.length + S.commitments.length + S.investments.length;
+    if (st.backupOn && records >= 4) {
+      const due = Math.max(now.getTime(), (Number(st.lastBackup) || 0) + 7 * 864e5);
+      list.push({ id: 4, channelId: QUIET, title: 'Back up your data', body: 'Your data lives only on this phone. Export a backup and send it to yourself.', schedule: { at: nextSaturdayEvening(new Date(due)), allowWhileIdle: true }, extra: { type: 'backup' } });
+    }
 
     // goals: a review is due the evening a period ends (always on, it is mandatory), then every morning until answered
     const active = S.goals.filter((g) => !g.review);
@@ -168,8 +200,8 @@ export async function syncNotifications() {
       list.push({ id: hash('gn' + end), channelId: CHANNEL, title: 'Your goals are waiting', body: 'You still have to answer them. It takes a minute.', schedule: { at: nag, repeats: true, every: 'day', allowWhileIdle: true }, extra: { type: 'goalReview' } });
     });
     if (st.goalCheckOn && active.length) {
-      list.push({ id: 5, channelId: CHANNEL, title: 'A fresh week', body: 'Look at your goals and decide what moves today.', schedule: { on: { weekday: 2, hour: 9, minute: 0 }, allowWhileIdle: true }, extra: { type: 'goalCheck' } });
-      list.push({ id: 6, channelId: CHANNEL, title: 'Halfway there', body: 'Update your goal progress while there is still time.', schedule: { on: { weekday: 5, hour: 19, minute: 0 }, allowWhileIdle: true }, extra: { type: 'goalCheck' } });
+      list.push({ id: 5, channelId: QUIET, title: 'A fresh week', body: 'Look at your goals and decide what moves today.', schedule: { on: { weekday: 2, hour: 9, minute: 0 }, allowWhileIdle: true }, extra: { type: 'goalCheck' } });
+      list.push({ id: 6, channelId: QUIET, title: 'Halfway there', body: 'Update your goal progress while there is still time.', schedule: { on: { weekday: 5, hour: 19, minute: 0 }, allowWhileIdle: true }, extra: { type: 'goalCheck' } });
     }
 
     // bucket list: countdown reminders, the day after a deadline, and a monthly pick
@@ -177,13 +209,13 @@ export async function syncNotifications() {
       S.bucket.filter((b) => b.status === 'open' && b.deadline).forEach((b) => {
         [90, 30, 7].forEach((off) => {
           const when = at(addDays(b.deadline, -off), '10:00');
-          if (when > now) list.push({ id: hash(b.id + 'b' + off), channelId: CHANNEL, title: 'A dream is getting close', body: `${b.title}: ${off} days left.`, schedule: { at: when, allowWhileIdle: true }, extra: { type: 'bucket' } });
+          if (when > now) list.push({ id: hash(b.id + 'b' + off), channelId: QUIET, title: 'A dream is getting close', body: `${b.title}: ${off} days left.`, schedule: { at: when, allowWhileIdle: true }, extra: { type: 'bucket' } });
         });
         const after = at(addDays(b.deadline, 1), '09:00');
         if (after > now) list.push({ id: hash(b.id + 'x'), channelId: CHANNEL, title: 'Dream deadline passed', body: `${b.title}: did you do it, move it, or let it go?`, schedule: { at: after, allowWhileIdle: true }, extra: { type: 'goalReview' } });
       });
       if (S.bucket.some((b) => b.status === 'open')) {
-        list.push({ id: 7, channelId: CHANNEL, title: 'Your dream of the month', body: 'Pick one dream to move forward this month.', schedule: { on: { day: 1, hour: 10, minute: 0 }, allowWhileIdle: true }, extra: { type: 'bucket' } });
+        list.push({ id: 7, channelId: QUIET, title: 'Your dream of the month', body: 'Pick one dream to move forward this month.', schedule: { on: { day: 1, hour: 10, minute: 0 }, allowWhileIdle: true }, extra: { type: 'bucket' } });
       }
     }
 
@@ -191,8 +223,15 @@ export async function syncNotifications() {
     const sleepLock = S.sleepLock;
     if (st.windDownOn !== false && sleepLock && sleepLock.on) {
       const { hour, minute } = windDownTime(sleepLock.from);
-      list.push({ id: 8, channelId: CHANNEL, title: `Sleep lock in ${WIND_LEAD} minutes`, body: `Finish what you are doing. Your apps lock at ${fmtTime(sleepLock.from)}.`, schedule: { on: { hour, minute }, allowWhileIdle: true }, extra: { type: 'screen' } });
+      list.push({ id: 8, channelId: QUIET, title: `Sleep lock in ${WIND_LEAD} minutes`, body: `Finish what you are doing. Your apps lock at ${fmtTime(sleepLock.from)}.`, schedule: { on: { hour, minute }, allowWhileIdle: true }, extra: { type: 'screen' } });
     }
+
+    // calendar events: 3 days before, 1 day before (09:00), 05:00 on the day, and at the event's own time
+    (S.events || []).forEach((ev) => {
+      reminderPlan(ev, todayStr, now).forEach((r) => {
+        list.push({ id: hash(r.key), channelId: r.quiet ? QUIET : CHANNEL, title: r.title, body: r.body, schedule: { at: r.at, allowWhileIdle: true }, extra: { type: 'event', date: r.date } });
+      });
+    });
 
     // fitness: the end of the rest between sets (only while a workout is running), and a reminder on each day not yet trained
     const fit = S.fitness;

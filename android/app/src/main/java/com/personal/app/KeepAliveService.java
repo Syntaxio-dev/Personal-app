@@ -79,6 +79,7 @@ public class KeepAliveService extends Service {
         if (Build.VERSION.SDK_INT >= 26 && nm != null) {
             NotificationChannel ch = new NotificationChannel(CHANNEL, "Prysm running in background", NotificationManager.IMPORTANCE_MIN);
             ch.setShowBadge(false);
+            ch.setLockscreenVisibility(Notification.VISIBILITY_SECRET); // nothing on the lock screen
             nm.createNotificationChannel(ch);
         }
         Intent open = new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
@@ -87,9 +88,11 @@ public class KeepAliveService extends Service {
                 .setSmallIcon(R.drawable.ic_stat_prysm)
                 .setLargeIcon(Brand.logo(this))
                 .setColor(0xFF7C3AED)
-                .setContentTitle("Prysm is ready")
-                .setContentText("Keeps payment and planning popups working")
+                .setContentTitle("Prysm is running in the background")
+                .setContentText("Safe to hide: long-press, then turn this notification off")
                 .setOngoing(true)
+                .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+                .setSilent(true)
                 .setShowWhen(false)
                 .setPriority(NotificationCompat.PRIORITY_MIN)
                 .setContentIntent(pi)

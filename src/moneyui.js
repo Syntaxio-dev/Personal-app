@@ -94,6 +94,7 @@ export function createMoney(d) {
       <div class="card safe"><div class="label">Safe to spend</div><div class="num ${sp.safe < 0 && !hidden ? 'bad' : ''}" style="margin:6px 0">${amt(sp.safe)}</div>
         <div class="sec">${note}</div><div class="muted" style="margin-top:6px">After ${inr(sp.bills)} of bills still to pay</div></div>
       <div class="grid2 top-actions"><button class="btn" data-act="addIncome">+ Income</button><button class="btn alt" data-act="addExpense">+ Expense</button></div>
+      <button class="link center" data-act="resetBalance">Balance not matching? Reset it</button>
       ${sources.length ? `<div class="card"><h2>Income this month</h2>${sources.map(([k, v]) => `<div class="row between" style="padding:6px 0"><span>${esc(k)}</span><b class="good">+${inr(v)}</b></div>`).join('')}</div>` : ''}
       <div class="card"><div class="row between"><h2 style="margin:0">Spending by category</h2><button class="icon" data-act="setBudget" aria-label="Edit budgets">${svg('edit')}</button></div><div style="height:12px"></div>${budgetRows}</div>
       ${people.length ? `<div class="card"><h2>Given to people</h2>${people.map(([p, v]) => `<div class="row between" style="padding:6px 0"><span>${esc(p)}</span><b class="bad">${inr(v)}</b></div>`).join('')}</div>` : ''}
@@ -957,6 +958,32 @@ export function createMoney(d) {
       if (v === null) return;
       S().settings.salaryAmount = Math.max(0, Number(v) || 0);
       await commit();
+    },
+    // "Start over": the wallet is derived from every record, so when it drifts away from the real bank/cash balance
+    // the user tells Prysm the real number and the opening balance absorbs the difference. History stays untouched.
+    resetBalance: async () => {
+      const st = S().settings;
+      const cur = M.wallet(S());
+      const v = await ui.prompt('Reset balance', '', `Your real balance now ₹ (Prysm shows ${inr(cur)})`);
+      if (v === null) return;
+      const raw = String(v).replace(/[,\s₹]/g, '');
+      const target = Number(raw);
+      if (raw === '' || !Number.isFinite(target) || Math.abs(target) > 1e9) { await ui.alert('Type the balance you really have right now, for example 12500.', 'Not a number'); return; }
+      const diff = Math.round((target - cur) * 100) / 100;
+      if (diff === 0) { ui.note('Prysm already shows this balance'); return; }
+      const sign = diff > 0 ? '+' : '-';
+      if (!(await ui.confirm(`Your wallet will show ${inr(target)} from now on (a correction of ${sign}${inr(Math.abs(diff))}). All your expenses, income and reports stay as they are.`, { title: 'Reset balance?', ok: 'Reset' }))) return;
+      const oldOpening = Number(st.openingBalance) || 0;
+      const oldLog = Array.isArray(st.balanceResets) ? st.balanceResets.slice() : [];
+      st.openingBalance = Math.round((oldOpening + diff) * 100) / 100;
+      st.balanceResets = [...oldLog, { ts: Date.now(), from: cur, to: target }].slice(-20);
+      ui.buzz('ok');
+      await refresh();
+      ui.undo('Balance reset', async () => {
+        st.openingBalance = oldOpening;
+        st.balanceResets = oldLog;
+        await refresh();
+      });
     },
     setOpening: async () => {
       const v = await ui.prompt('Opening balance', S().settings.openingBalance || '', 'Money you already have ₹');

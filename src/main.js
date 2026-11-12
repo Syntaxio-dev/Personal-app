@@ -6,7 +6,7 @@ import '@fontsource/manrope/600.css';
 import '@fontsource/manrope/700.css';
 import '@fontsource/manrope/800.css';
 import './style.css';
-import { Capacitor, registerPlugin } from '@capacitor/core';
+import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core';
 import { App } from '@capacitor/app';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
@@ -23,7 +23,9 @@ import { createGoals } from './goalsui.js';
 import { createScreen } from './screenui.js';
 import { createFitness } from './fitnessui.js';
 import { pad, dateStr, today, addDays, daysBetween, dayName, dayLabel, fmtTime } from './dates.js';
-import { syncNotifications, initNotifications, planTime, exactAlarmsAllowed, openExactAlarmSettings, NAG_SLOTS, setNativePlan, setSyncHook, testReminder } from './notify.js';
+import { createPaySafe } from './paysafe.js';
+import { createEvents } from './eventsui.js';
+import { syncNotifications, initNotifications, planTime, exactAlarmsAllowed, openExactAlarmSettings, nagSlots, setNativePlan, setSyncHook, testReminder } from './notify.js';
 
 // "Hide balance" in Settings keeps amounts as dots; a tap on the dots shows them for REVEAL_MS
 const REVEAL_MS = 12000;
@@ -104,7 +106,7 @@ const DASH_WIDGETS = {
   quick: { name: 'Shortcuts', desc: 'Add an expense, income or task' },
   tasks: { name: 'Tasks for today', desc: 'What is left for today, tick them here' },
   goals: { name: 'Goals', desc: 'Your goals for this period, update them here' },
-  attendance: { name: 'Attendance', desc: 'Mark today and see the month' },
+  attendance: { name: 'Attendance', desc: 'Mark today, see the month, your next exam and events' },
   bills: { name: 'Bills due', desc: 'Appears only when something is due soon' },
   bucket: { name: 'Bucket list', desc: 'Your dream of the month and how many are done' },
   screen: { name: 'Screen time', desc: 'Phone time today and your app limits' },
@@ -480,6 +482,7 @@ function dashWidget(id) {
     const sk = att.streaks(c);
     return `<div class="card dcard"><div class="dhead"><h2>Attendance</h2><button class="link" data-act="goto" data-tab="att">Open</button></div>
       <div class="drow2"><div class="dstate">${marked ? dot(STATUS_COLOR[e.s]) + STATUS[e.s] : '<span class="muted">Not marked yet</span>'}</div><button class="btn alt sm" data-act="markToday">${marked ? 'Change' : 'Mark today'}</button></div>
+      ${eventsUi.dashLines()}
       <div class="dfoot muted">${st.pct === null ? 'No data this month yet' : `${st.pct}% this month`}${sk.cur ? ` · ${sk.cur}-day streak` : ''}</div></div>`;
   }
   if (id === 'bills') {
@@ -528,6 +531,23 @@ const screenUi = createScreen({
   syncNotifications: () => syncNotifications(),
 });
 
+// Calendar events on the Attendance page (birthdays, festivals, exams, events) with their reminders
+const eventsUi = createEvents({
+  ui, openModal, closeModal, setSheet: (h) => setSheet(h), commit, render: (a) => render(a), esc, dot, svg, buzz, pickTime: (o) => pickTime(o), fmtTime,
+  syncNotifications: () => syncNotifications(), backToDay: (date) => markDayForm(date), getYm: () => ym,
+  // the ONLY network call in Prysm: the user taps "Import Indian festivals", one public calendar file is downloaded (no data is sent)
+  httpGet: async (url) => {
+    const r = await CapacitorHttp.get({ url, responseType: 'text' });
+    if (r.status !== 200) throw new Error(`HTTP ${r.status}`);
+    return typeof r.data === 'string' ? r.data : '';
+  },
+});
+
+// Payment-safe mode (Settings): the phone keeps the list and the switch; window.__screenPlugin is the same test hook as above
+const paySafeUi = createPaySafe({
+  ui, openModal, closeModal, render: (a) => render(a), esc, dot, toast, plugin: window.__screenPlugin || PaymentCapture, isNative: !!window.__screenPlugin || Capacitor.isNativePlatform(),
+});
+
 // Fitness mode. window.__fitPlugin is a test hook (a fake phone for the step counter), never set in the app.
 const fitnessUi = createFitness({
   ui, openModal, closeModal, commit, render: (a) => render(a), esc, svg, dot, buzz, pickTime: (o) => pickTime(o),
@@ -566,10 +586,11 @@ const views = {
     const days = lastDay(ym);
     let cells = ['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d) => `<div class="h">${d}</div>`).join('');
     for (let i = 0; i < first; i++) cells += '<div></div>';
+    const evMonth = eventsUi.monthMap(ym);
     for (let d = 1; d <= days; d++) {
       const ds = `${ym}-${pad(d)}`;
       const k = att.dayKind(c, ds);
-      cells += `<div class="d st-${k} ${ds === c.t ? 'today' : ''}" data-act="markDay" data-date="${ds}">${d}${'PHLOA'.includes(k) ? '<i></i>' : ''}</div>`;
+      cells += `<div class="d st-${k} ${ds === c.t ? 'today' : ''}" data-act="markDay" data-date="${ds}">${d}${'PHLOA'.includes(k) ? '<i></i>' : ''}${eventsUi.markers(evMonth[ds])}</div>`;
     }
     const legend = Object.entries(STATUS).map(([k, l]) => `<span>${dot(STATUS_COLOR[k])}${l}</span>`).join('');
 
@@ -587,8 +608,9 @@ const views = {
     const away = Object.keys(S.attendance).filter((k) => k.startsWith(ym) && (S.attendance[k].s === 'H' || S.attendance[k].s === 'L')).sort();
     const awayRows = away.map((k) => { const e = S.attendance[k]; return `<div class="log-row" data-act="markDay" data-date="${k}"><div class="log-top"><b>${dot(STATUS_COLOR[e.s])}${STATUS[e.s]}</b><span>${esc(dayName(k))}</span></div><div class="log-res">${e.note ? esc(e.note) : 'No reason noted. Tap to add one.'}</div></div>`; }).join('');
     return `${monthPicker()}
-      <div class="card"><div class="cal">${cells}</div><div class="legend">${legend}</div>
-        <div class="muted" style="margin-top:12px">Unmarked days count as absent. Tap a day to mark it.</div></div>
+      <div class="card"><div class="cal">${cells}</div><div class="legend">${legend}</div>${eventsUi.legend()}
+        <div class="muted" style="margin-top:12px">Unmarked days count as absent. Tap a day to mark it or to add an event. The small dots in a corner are events.</div></div>
+      ${eventsUi.card()}
       ${awayRows ? `<div class="card"><h2>Leave and half-days</h2>${awayRows}</div>` : ''}
       <div class="card"><div class="row between"><h2 style="margin:0">Summary</h2><div class="seg">${seg('month', 'Month')}${seg('overall', 'Overall')}</div></div>
         <div class="att-hero"><div class="num">${st.pct === null ? '—' : st.pct + '%'}</div><div class="muted">attendance · ${esc(sub)}</div></div>
@@ -609,7 +631,7 @@ const views = {
     const chip = (k, l, n) => `<button class="${todoFilter === k ? 'on' : ''}" data-act="filter" data-k="${k}">${l}${n ? `<i>${n}</i>` : ''}</button>`;
     const top = `<div class="grid2 top-actions"><button class="btn" data-act="addTodo">+ New task</button><button class="btn alt" data-act="planTomorrow">Plan tomorrow</button></div>`;
     const banner = overdue.length && todoFilter !== 'done'
-      ? `<div class="banner ${urgent ? 'urgent' : ''}">${dot(urgent ? '#f87171' : '#fbbf24')}<div><b>${overdue.length} overdue task${overdue.length > 1 ? 's' : ''}</b><span>${urgent ? `${urgent} urgent: you get ${NAG_SLOTS.length} alerts a day until they are done.` : 'One miss is a mistake. Clear it today.'}</span></div></div>`
+      ? `<div class="banner ${urgent ? 'urgent' : ''}">${dot(urgent ? '#f87171' : '#fbbf24')}<div><b>${overdue.length} overdue task${overdue.length > 1 ? 's' : ''}</b><span>${urgent ? `${urgent} urgent: you get ${nagSlots(db.get().settings).length} alerts a day until they are done.` : 'One miss is a mistake. Clear it today.'}</span></div></div>`
       : '';
     const chips = `<div class="chips subtabs scroll">${chip('pending', 'Pending', pending.length)}${chip('today', 'Today', upToToday.length)}${chip('done', 'Completed')}${chip('report', 'Report')}</div>`;
     if (todoFilter === 'report') return chips + taskReport(S);
@@ -634,6 +656,7 @@ const views = {
           <div class="grid2" style="margin-top:10px"><button class="btn alt" data-act="capAppSettings">App settings</button><button class="btn alt" data-act="capLog">Capture log</button></div>
           <div class="muted" style="margin-top:12px;line-height:1.5">If "Expense now" works but the other tests do not, your phone is freezing Prysm in the background. On iQOO / Vivo open App settings and allow <b>Display pop-up windows</b>, <b>Display pop-up windows while running in the background</b> and <b>Autostart</b>, and set Battery to <b>No restrictions</b>.</div></div>`
       : `<div class="card"><h2>Payment capture</h2><div class="sec">Available in the installed Android app.</div></div>`;
+    const paySafeCard = paySafeUi.card();
     const logoCard = native || window.__screenPlugin
       ? `<div class="card"><h2>Notification logo</h2>
           <div class="sec" style="line-height:1.55">Every Prysm notification carries the Prysm logo. If the notification bar still shows an old logo, your phone has saved the old app icon. Send a test to see what a brand new notification looks like.</div>
@@ -656,7 +679,8 @@ const views = {
         <div class="muted">${st.planOn ? `${Capacitor.isNativePlatform() ? 'A popup opens over any app' : 'Reminder'} at ${fmtTime(`${pad(pt.hour)}:${pad(pt.minute)}`)} every night.` : 'Planner reminder is off.'}</div></div>
       <div class="card"><h2>Notifications</h2>
         ${row('Task reminders', 'Alert at the time you set on a task', 'remindOn')}
-        ${row('Overdue alerts', `Tasks pending 2+ days get ${NAG_SLOTS.length} alerts a day`, 'nagOn')}
+        ${row('Overdue alerts', 'Tasks pending 2+ days: one combined alert, not one per task', 'nagOn')}
+        ${st.nagOn ? `<span class="label" style="margin-top:6px">Overdue alerts per day</span><div class="chips">${[1, 2, 4].map((n) => `<button class="${nagSlots(st).length === n ? 'on' : ''}" data-act="setNagPerDay" data-v="${n}">${n}</button>`).join('')}</div>` : ''}
         ${row('Salary reminder', 'Daily alert if salary is not added after salary day', 'salaryOn')}
         ${row('Bill reminders', 'Day before, on the day, and daily when overdue', 'billOn')}
         ${row('Weekly summary', 'Sunday evening: where your money went', 'weeklyOn')}
@@ -664,14 +688,16 @@ const views = {
         ${row('Goal check-ins', 'Monday kickoff and a Thursday halfway nudge', 'goalCheckOn')}
         ${row('Dream reminders', 'Deadline countdowns and a monthly dream pick', 'dreamOn')}
         ${row('Sleep lock warning', 'Half an hour before the sleep lock starts', 'windDownOn')}
-        <div class="muted" style="margin-top:12px">Goal reviews cannot be switched off. They are the point.</div></div>
+        <div class="muted" style="margin-top:12px;line-height:1.5">Goal reviews cannot be switched off. They are the point.<br>Weekly summary, backup, check-ins, dream reminders and the sleep lock warning arrive quietly (no sound, no pop-up). Backup reminders only come when your last backup is over a week old.</div>
+        ${native ? `<div class="set-row" style="margin-top:10px"><div class="grow"><b>"Prysm is running" notice</b><span>The small permanent notification. Turn it off there, Prysm keeps working</span></div><button class="capsule set" style="margin:0" data-act="hideRunning"><span>Hide</span></button></div>` : ''}</div>
       <div class="card"><h2>Comfort</h2>
         ${row('Haptic feedback', 'A small buzz when you tick, pay or swipe', 'haptics')}
         ${row('Hide balance', 'Shows dots instead of your balance. Tap the dots to see it for a few seconds', 'hideBalance')}</div>
       <div class="card"><h2>Money</h2>
         <div class="set-row"><div class="grow"><b>Salary day</b><span>You are reminded the day after if it is not added</span></div><button class="capsule set" style="margin:0" data-act="setSalaryDay"><span>${ord(Number(st.salaryDay) || 11)}</span></button></div>
         <div class="set-row"><div class="grow"><b>Expected salary</b><span>Pre-fills the Add salary form</span></div><button class="capsule ${st.salaryAmount ? 'set' : ''}" style="margin:0" data-act="setSalaryAmt"><span>${st.salaryAmount ? inr(st.salaryAmount) : 'Not set'}</span></button></div>
-        <div class="set-row"><div class="grow"><b>Opening balance</b><span>Money you already have today</span></div><button class="capsule ${st.openingBalance ? 'set' : ''}" style="margin:0" data-act="setOpening"><span>${st.openingBalance ? inr(st.openingBalance) : 'Not set'}</span></button></div></div>
+        <div class="set-row"><div class="grow"><b>Opening balance</b><span>Money you already have today</span></div><button class="capsule ${st.openingBalance ? 'set' : ''}" style="margin:0" data-act="setOpening"><span>${st.openingBalance ? inr(st.openingBalance) : 'Not set'}</span></button></div>
+        <div class="set-row"><div class="grow"><b>Reset balance</b><span>${(st.balanceResets || []).length ? `Last reset ${dayName(dateStr(new Date(st.balanceResets[st.balanceResets.length - 1].ts)))}. ` : ''}Wallet not matching your real money? Start over from the real balance. History stays</span></div><button class="capsule set" style="margin:0" data-act="resetBalance"><span>Reset</span></button></div></div>
       <div class="card"><h2>Attendance</h2>
         <span class="label">Weekly off</span>
         <div class="chips week">${['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((l, i) => `<button class="${(st.weekOff || []).includes(i) ? 'on' : ''}" data-act="toggleOff" data-v="${i}">${l}</button>`).join('')}</div>
@@ -680,6 +706,7 @@ const views = {
         <input id="s-attstart" type="date" value="${att.trackStart(db.get())}" max="${today()}">
         <div class="muted" style="margin-top:-2px">Days before this date are ignored. Unmarked days after it count as absent.</div></div>
       ${capture_}
+      ${paySafeCard}
       ${logoCard}
       <div class="card"><h2>Backup</h2>
         <div class="grid2"><button class="btn" data-act="export">Export</button><button class="btn alt" data-act="import">Import</button></div>
@@ -1035,9 +1062,11 @@ function markDayForm(date) {
   const hint = date > t ? 'You can plan leave or a holiday in advance.' : date === t ? 'If you leave today unmarked it becomes absent at midnight.' : 'Unmarked days count as absent.';
   setSheet(`<h2>${esc(dayName(date))}</h2>
     <div class="muted" style="margin:-8px 0 14px">${hint}</div>
+    ${eventsUi.festivalHint(date)}
     <div class="grid2">${['P', 'H', 'L', 'O'].map((k) => `<button class="btn ${cur === k ? 'on' : 'alt'}" data-act="setDay" data-date="${date}" data-s="${k}">${dot(STATUS_COLOR[k])}${STATUS[k]}</button>`).join('')}</div>
     ${v && v.note ? `<div class="muted" style="margin-top:12px">Reason: ${esc(v.note)}</div>` : ''}
-    ${cur ? `<button class="btn danger" style="margin-top:10px" data-act="clearDay" data-date="${date}">Clear mark</button>` : ''}`);
+    ${cur ? `<button class="btn danger" style="margin-top:10px" data-act="clearDay" data-date="${date}">Clear mark</button>` : ''}
+    ${eventsUi.dayBlock(date)}`);
 }
 
 // swap the content of the open sheet in place (no slide-up replay), or open it
@@ -1061,19 +1090,31 @@ function dayNoteForm(date, s) {
 // ---------- backup ----------
 async function doExport() {
   const name = `prysm-backup-${today()}.json`;
+  const st = db.get().settings;
+  const before = st.lastBackup;
+  // the backup date goes INTO the file too, so a restored backup does not nag again
+  st.lastBackup = Date.now();
   const text = db.exportJson();
-  if (Capacitor.isNativePlatform()) {
-    const r = await Filesystem.writeFile({ path: name, data: text, directory: Directory.Cache, encoding: Encoding.UTF8 });
-    await Share.share({ title: name, url: r.uri, dialogTitle: 'Send backup' });
-  } else {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
-    a.download = name;
-    a.click();
+  try {
+    if (Capacitor.isNativePlatform()) {
+      const r = await Filesystem.writeFile({ path: name, data: text, directory: Directory.Cache, encoding: Encoding.UTF8 });
+      // the file exists now = the backup is made. A cancelled or failed share sheet must not make the app forget it
+      try { await Share.share({ title: name, url: r.uri, dialogTitle: 'Send backup' }); } catch (e) { /* share sheet closed */ }
+    } else {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+      a.download = name;
+      a.click();
+    }
+  } catch (e) {
+    st.lastBackup = before; // the file could not be written: nothing was backed up
+    toast('Backup failed: ' + (e && e.message ? e.message : 'could not write the file'));
+    return;
   }
-  db.get().settings.lastBackup = Date.now();
   await db.save();
+  syncNotifications();
   render();
+  toast('Backup made');
 }
 function doImport() {
   const inp = document.createElement('input');
@@ -1320,6 +1361,8 @@ const actions = {
       await ui.alert('Two test notifications are on the way. Pull down the notification bar and look at the logo on each.', 'Test sent');
     } catch (e) { toast(e.message || 'Could not show the test'); }
   },
+  setNagPerDay: async (el) => { db.get().settings.nagPerDay = Number(el.dataset.v) || 2; await commit(); syncNotifications(); },
+  hideRunning: async () => { try { await PaymentCapture.openRunningNotificationSettings(); } catch (e) { toast('Update the app to use this'); } },
   notifSettings: async () => { try { await (window.__screenPlugin || PaymentCapture).openNotificationSettings(); } catch (e) { toast('Could not open settings'); } },
   capLog: async () => {
     let items = [];
@@ -1333,6 +1376,8 @@ const actions = {
 Object.assign(actions, moneyUi.actions);
 Object.assign(actions, goalsUi.actions);
 Object.assign(actions, screenUi.actions);
+Object.assign(actions, paySafeUi.actions);
+Object.assign(actions, eventsUi.actions);
 Object.assign(actions, fitnessUi.actions);
 // the header button: Life <-> Fitness. The look changes with the mode (data-mode on <html>, see render()).
 actions.setMode = (el) => {
@@ -1526,6 +1571,7 @@ function openFromNotification(extra) {
   else if (extra.type === 'lent') { tab = 'money'; moneyUi.setTab('lent'); render('up'); }
   else if (extra.type === 'weekly') { tab = 'money'; moneyUi.setTab('overview'); render('up'); moneyUi.openWeekly(); }
   else if (extra.type === 'backup') { tab = 'settings'; render('up'); }
+  else if (extra.type === 'event') { tab = 'att'; if (/^\d{4}-\d{2}-\d{2}$/.test(extra.date || '')) { ym = extra.date.slice(0, 7); render('up'); markDayForm(extra.date); } else render('up'); }
   else if (extra.type === 'goalReview') { tab = 'goals'; goalsUi.setTab('goals'); render('up'); goalsUi.checkDue({ force: true }); }
   else if (extra.type === 'goalCheck') { tab = 'goals'; goalsUi.setTab('goals'); render('up'); }
   else if (extra.type === 'bucket') { tab = 'goals'; goalsUi.setTab('bucket'); render('up'); }

@@ -761,6 +761,11 @@ final class ScreenTime {
 
     static void watchdog(Context ctx) {
         settleFocus(ctx);
+        // a payment-safe pause switches the blocking service off on purpose: do not shout, and end a pause that went stale
+        if (PaySafe.paused(ctx)) {
+            PaySafe.tick(ctx);
+            return;
+        }
         if (!guardActive(ctx)) {
             ScreenAlerts.cancel(ctx, ScreenAlerts.ID_BLOCKING);
             ScreenAlerts.cancel(ctx, ScreenAlerts.ID_ADMIN);
@@ -813,7 +818,7 @@ final class ScreenTime {
         }
     }
 
-    private static boolean sameService(Context ctx, String entry) {
+    static boolean sameService(Context ctx, String entry) {
         ComponentName me = new ComponentName(ctx, PrysmAccessibilityService.class);
         return entry.equals(me.flattenToString()) || entry.equals(me.flattenToShortString());
     }
@@ -901,12 +906,16 @@ final class ScreenTime {
      * A second opinion for when the accessibility service cannot read the window; null when unknown.
      */
     static String topPackageByUsage(Context ctx) {
+        return topPackageByUsage(ctx, 3 * 60000L);
+    }
+
+    static String topPackageByUsage(Context ctx, long lookBackMs) {
         try {
             if (!hasUsageAccess(ctx)) return null;
             UsageStatsManager usm = (UsageStatsManager) ctx.getSystemService(Context.USAGE_STATS_SERVICE);
             if (usm == null) return null;
             long end = System.currentTimeMillis();
-            UsageEvents events = usm.queryEvents(end - 3 * 60000L, end);
+            UsageEvents events = usm.queryEvents(end - lookBackMs, end);
             if (events == null) return null;
             UsageEvents.Event e = new UsageEvents.Event();
             String top = null;
