@@ -746,3 +746,37 @@ html[data-mode="fit"] .hero .bar > div { background: #fff; }
 .fm-item span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fm-item em { font-style: normal; color: var(--t3); font-size: 12px; }
 button[disabled].btn { opacity: 0.45; pointer-events: none; }
+
+/* ---------- Vault ---------- */
+.vic { flex: none; width: 40px; height: 40px; border-radius: 12px; display: inline-flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--c, #a78bfa) 14%, transparent); color: var(--c, #a78bfa); }
+.vic svg, .vbig svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.vlock { text-align: center; padding-top: 26px; padding-bottom: 22px; }
+.vlock .sec { margin-bottom: 16px; }
+.vlock input { text-align: center; letter-spacing: 2px; }
+.vbig { display: inline-flex; align-items: center; justify-content: center; width: 64px; height: 64px; border-radius: 20px; margin-bottom: 14px; color: var(--p3); background: rgba(var(--a-rgb), 0.14); box-shadow: 0 0 30px rgba(var(--a-rgb), 0.25); }
+.vbig svg { width: 30px; height: 30px; }
+.verr { margin: 0 0 12px; font-size: 13px; color: var(--red); line-height: 1.45; }
+.vf { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--glass-line); }
+.vf .grow { flex: 1; min-width: 0; }
+.vf .label { margin: 0 0 2px !important; }
+.vv { font: 600 16px 'DM Sans', sans-serif; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.vv.multi { white-space: pre-wrap; font-weight: 400; }
+.vsec { display: flex; align-items: flex-start; gap: 8px; }
+.vsec input { flex: 1; min-width: 0; }
+.vsec .btn.sm { margin-bottom: 10px; flex: none; }
+.vimg { max-height: 60vh; overflow: auto; border-radius: 12px; background: rgba(255,255,255,0.04); text-align: center; }
+.vimg img { display: block; width: 100%; height: auto; }
+.vimg.zoom img { width: 240%; max-width: none; }
+.item.tap { cursor: pointer; }
+button.btn svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; vertical-align: -3px; margin-right: 6px; }
+.vx { padding: 12px; margin-bottom: 10px; border-radius: 14px; background: rgba(255,255,255,0.03); border: 1px solid var(--glass-line); }
+.vx input { margin-bottom: 8px; }
+.chipbtn { display: inline-flex; align-items: center; gap: 6px; min-height: 42px; padding: 0 14px; border-radius: 21px; border: 1px solid var(--line); background: var(--glass); color: var(--t2); font: 500 13px 'DM Sans', sans-serif; }
+.chipbtn svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.chipbtn.on { background: var(--tint); color: var(--p2); border-color: rgba(var(--p2-rgb),0.4); }
+.vck { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--glass-line); min-height: 48px; }
+.vck input[type=checkbox] { margin: 0; }
+.vck .grow { flex: 1; min-width: 0; }
+.vck b { display: block; font: 700 15px 'Manrope', sans-serif; }
+.vck span span { display: block; font-size: 13px; color: var(--t3); overflow-wrap: anywhere; }
+.vprev { margin: 0; padding: 12px 14px; border-radius: 12px; background: rgba(255,255,255,0.05); border: 1px solid var(--line); color: var(--t1, #fff); font: 400 14px/1.55 'DM Sans', sans-serif; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; max-height: 34vh; overflow: auto; }

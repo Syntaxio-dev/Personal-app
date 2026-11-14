@@ -3,12 +3,13 @@ import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
 import { cleanSl, FOCUS_MAX } from './screen.js';
 import { emptyFitness, cleanFitness } from './fitness.js';
 import { cleanEvents } from './events.js';
+import { cleanVault } from './vault.js';
 
 const LS_KEY = 'personal-app-state';
 let conn = null;
 let state = null;
 
-export const DASH_IDS = ['wallet', 'quick', 'tasks', 'goals', 'attendance', 'bills', 'bucket', 'screen'];
+export const DASH_IDS = ['wallet', 'quick', 'tasks', 'goals', 'attendance', 'bills', 'bucket', 'screen', 'vault'];
 
 const empty = () => ({
   settings: {
@@ -36,6 +37,7 @@ const empty = () => ({
   focus: { active: null, log: [] },
   fitness: emptyFitness(),
   events: [],
+  vault: null, // encrypted Vault (documents, passwords): only ciphertext, see vault.js
 });
 
 // New fields get defaults here, so data saved by older versions of the app still loads.
@@ -58,6 +60,7 @@ const normalize = (s) => {
   out.settings.mode = out.settings.mode === 'fit' ? 'fit' : 'life';
   out.fitness = cleanFitness(out.fitness);
   out.events = cleanEvents(out.events);
+  out.vault = cleanVault(out.vault);
   delete out.settings.screenStrict;
   return out;
 };
@@ -165,6 +168,7 @@ function sanitize(s) {
   };
   s.fitness = cleanFitness(s.fitness);
   s.events = cleanEvents(s.events);
+  s.vault = cleanVault(s.vault);
   s.settings.mode = s.settings.mode === 'fit' ? 'fit' : 'life';
   const seen = {};
   Object.entries(s.settings.streakSeen && typeof s.settings.streakSeen === 'object' ? s.settings.streakSeen : {}).forEach(([k, v]) => { if (/^[\w-]{1,64}$/.test(k) && num(v) > 0) seen[k] = Math.round(num(v)); });

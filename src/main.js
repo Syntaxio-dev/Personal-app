@@ -25,6 +25,7 @@ import { createFitness } from './fitnessui.js';
 import { pad, dateStr, today, addDays, daysBetween, dayName, dayLabel, fmtTime } from './dates.js';
 import { createPaySafe } from './paysafe.js';
 import { createEvents } from './eventsui.js';
+import { createVault } from './vaultui.js';
 import { syncNotifications, initNotifications, planTime, exactAlarmsAllowed, openExactAlarmSettings, nagSlots, setNativePlan, setSyncHook, testReminder } from './notify.js';
 
 // "Hide balance" in Settings keeps amounts as dots; a tap on the dots shows them for REVEAL_MS
@@ -88,6 +89,14 @@ const ICON = {
   camera: '<path d="M4 8h3l1.5-2h7L17 8h3v11H4z"/><circle cx="12" cy="13.5" r="3.2"/>',
   more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   medal: '<circle cx="12" cy="14.5" r="5.5"/><path d="M8.5 3.5l2 5.5M15.5 3.5l-2 5.5M12 12l1 2 2.2.3-1.6 1.5.4 2.2-2-1.1-2 1.1.4-2.2-1.6-1.5 2.2-.3z"/>',
+  vault: '<path d="M12 3l7.5 3v5.5c0 4.5-3.2 8-7.5 9.5-4.3-1.5-7.5-5-7.5-9.5V6z"/><rect x="9" y="10.5" width="6" height="5" rx="1.3"/><path d="M10.3 10.5V9a1.7 1.7 0 013.4 0v1.5"/>',
+  fingerprint: '<path d="M12 4a7 7 0 00-7 7v2M12 4a7 7 0 017 7v1.5M8.5 20c.7-1.4 1-3 1-4.5V11a2.5 2.5 0 015 0v4.5c0 1.5.3 3 1 4.5M12 11v5c0 1.2.3 2.4.9 3.5M17 13.5c0 2.2-.4 4.3-1.2 6"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l8-8M16 7l3 3M14 9l2 2"/>',
+  doc: '<path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4M10 12h5M10 16h5"/>',
+  note: '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h8M8 17h5"/>',
+  copy: '<rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2"/>',
+  share: '<circle cx="6" cy="12" r="2.2"/><circle cx="18" cy="6" r="2.2"/><circle cx="18" cy="18" r="2.2"/><path d="M8 11l8-4M8 13l8 4"/>',
+  file: '<path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/>',
   fsteps: '<circle cx="14" cy="4.5" r="1.8"/><path d="M9.5 21l2.5-6.5 3 2.5v4M12 14.5l-1-5 3-1.5 2.5 3 3 .5M10 10l-3.5 1.5"/>',
 };
 const svg = (k) => `<svg viewBox="0 0 24 24">${ICON[k]}</svg>`;
@@ -110,6 +119,7 @@ const DASH_WIDGETS = {
   bills: { name: 'Bills due', desc: 'Appears only when something is due soon' },
   bucket: { name: 'Bucket list', desc: 'Your dream of the month and how many are done' },
   screen: { name: 'Screen time', desc: 'Phone time today and your app limits' },
+  vault: { name: 'Vault', desc: 'Open your documents and passwords (locked with a PIN)' },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -493,6 +503,7 @@ function dashWidget(id) {
   }
   if (id === 'goals' || id === 'bucket') return goalsUi.widget(id);
   if (id === 'screen') return screenUi.widget();
+  if (id === 'vault') return vaultUi.widget();
   return '';
 }
 
@@ -548,6 +559,12 @@ const paySafeUi = createPaySafe({
   ui, openModal, closeModal, render: (a) => render(a), esc, dot, toast, plugin: window.__screenPlugin || PaymentCapture, isNative: !!window.__screenPlugin || Capacitor.isNativePlatform(),
 });
 
+// Vault: documents, passwords, bank details and notes, encrypted with the user's PIN (window.__vaultPlugin is a test hook: a fake phone for the fingerprint paths)
+const vaultUi = createVault({
+  ui, openModal, closeModal, setSheet: (h) => setSheet(h), render: (a) => render(a), esc, svg, dot, buzz,
+  plugin: window.__vaultPlugin || window.__screenPlugin || PaymentCapture, isNative: !!window.__vaultPlugin || !!window.__screenPlugin || Capacitor.isNativePlatform(), getTab: () => tab,
+});
+
 // Fitness mode. window.__fitPlugin is a test hook (a fake phone for the step counter), never set in the app.
 const fitnessUi = createFitness({
   ui, openModal, closeModal, commit, render: (a) => render(a), esc, svg, dot, buzz, pickTime: (o) => pickTime(o),
@@ -577,6 +594,8 @@ const views = {
   goals() { return goalsUi.view(); },
 
   screen() { return screenUi.view(); },
+
+  vault() { return vaultUi.view(); },
 
   att() {
     const S = db.get();
@@ -667,6 +686,8 @@ const views = {
       <div class="card"><h2>Profile</h2><span class="label">Your name</span><input id="s-name" value="${esc(st.name)}" placeholder="What should Prysm call you?" maxlength="30" autocomplete="off" style="margin-bottom:0"></div>
       <div class="card"><h2>Dashboard</h2>
         <div class="set-row"><div class="grow"><b>Customize</b><span>Choose what shows on your dashboard and in which order</span></div><button class="capsule set" style="margin:0" data-act="dashEdit"><span>Edit</span></button></div></div>
+      <div class="card"><h2>Vault</h2>
+        <div class="set-row"><div class="grow"><b>Documents and passwords</b><span>Aadhaar, PAN, logins, bank details. Locked with your own PIN</span></div><button class="capsule set" style="margin:0" data-act="goVault"><span>Open</span></button></div></div>
       <div class="card"><h2>Screen time</h2>
         <div class="set-row"><div class="grow"><b>Usage and limits</b><span>See your phone time and stop apps once your daily limit is used up</span></div><button class="capsule set" style="margin:0" data-act="goScreen"><span>Open</span></button></div></div>
       ${Capacitor.isNativePlatform() ? `<div class="card"><h2>Home screen widgets</h2><div class="sec" style="line-height:1.6">Long-press an empty spot on your home screen, tap <b>Widgets</b>, then pick <b>Prysm</b>:<br>• <b>Quick add</b>: expense, income, task, attendance<br>• <b>Today</b>: tasks left and your wallet<br>• <b>Attendance</b>: percentage and a 14-day graph</div></div>` : ''}
@@ -1378,6 +1399,7 @@ Object.assign(actions, goalsUi.actions);
 Object.assign(actions, screenUi.actions);
 Object.assign(actions, paySafeUi.actions);
 Object.assign(actions, eventsUi.actions);
+Object.assign(actions, vaultUi.actions);
 Object.assign(actions, fitnessUi.actions);
 // the header button: Life <-> Fitness. The look changes with the mode (data-mode on <html>, see render()).
 actions.setMode = (el) => {
@@ -1388,6 +1410,7 @@ actions.setMode = (el) => {
   render('fade');
 };
 actions.openFitSettings = () => { tab = 'fset'; window.scrollTo(0, 0); render('next'); };
+actions.goVault = () => { tab = 'vault'; window.scrollTo(0, 0); render('next'); vaultUi.onOpen(); };
 actions.goScreen = () => { tab = 'screen'; window.scrollTo(0, 0); render('next'); screenUi.sync(true).then((changed) => { if (changed && tab === 'screen' && $('modal').hidden) render(); }); };
 
 document.addEventListener('click', (e) => {
@@ -1522,8 +1545,9 @@ function render(anim) {
   // the whole look follows the mode: purple in Life, blue in Fitness (tokens in style.css). Remember it for the next start.
   document.documentElement.dataset.mode = fit ? 'fit' : 'life';
   if (db.get().settings.mode !== (fit ? 'fit' : 'life')) { db.get().settings.mode = fit ? 'fit' : 'life'; db.save(); }
-  const subPage = tab === 'settings' || tab === 'screen' || FPAGES.includes(tab);
-  const title = tab === 'settings' ? 'Settings' : tab === 'screen' ? 'Screen time' : FPAGES.includes(tab) ? fitnessUi.title(tab) : tabList().find((t) => t[0] === tab)[1];
+  vaultUi.leave(tab); // the Vault locks as soon as another page is shown
+  const subPage = tab === 'settings' || tab === 'screen' || tab === 'vault' || FPAGES.includes(tab);
+  const title = tab === 'settings' ? 'Settings' : tab === 'screen' ? 'Screen time' : tab === 'vault' ? 'Vault' : FPAGES.includes(tab) ? fitnessUi.title(tab) : tabList().find((t) => t[0] === tab)[1];
   const modeBtn = fit
     ? `<button class="icon modesw" data-act="setMode" data-mode="life" aria-label="Back to Life mode">${svg('home')}</button>`
     : `<button class="icon modesw" data-act="setMode" data-mode="fit" aria-label="Open Fitness mode">${svg('fwork')}</button>`;

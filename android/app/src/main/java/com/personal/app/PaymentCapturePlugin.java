@@ -8,6 +8,10 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.util.Base64;
+import android.view.WindowManager;
+import androidx.core.content.FileProvider;
+import java.io.File;
 import android.provider.Settings;
 import android.service.notification.NotificationListenerService;
 
@@ -35,6 +39,106 @@ public class PaymentCapturePlugin extends Plugin {
                 : new Intent(action);
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         getContext().startActivity(i);
+    }
+
+    /**
+     * Vault: while it is open no screenshot or screen recording is possible and Recents shows no picture of the screen
+     * (FLAG_SECURE). JS switches it on at unlock and off at lock.
+     */
+    @PluginMethod
+    public void setSecure(final PluginCall call) {
+        final boolean on = Boolean.TRUE.equals(call.getBoolean("on", false));
+        if (getActivity() == null) { call.resolve(); return; }
+        getActivity().runOnUiThread(() -> {
+            if (on) getActivity().getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+            else getActivity().getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+            call.resolve();
+        });
+    }
+
+    /**
+     * Vault: opens a short-lived readable copy (in the cache folder, "vault-tmp/<id>.<ext>") in a viewer app, for example a
+     * PDF reader. Only that one folder can be opened.
+     */
+    @PluginMethod
+    public void openFile(PluginCall call) {
+        try {
+            String path = call.getString("path", "");
+            if (path == null || !path.matches("vault-tmp/[a-z0-9]{4,24}\\.[a-z0-9]{1,5}")) { call.reject("bad path"); return; }
+            File f = new File(getContext().getCacheDir(), path);
+            if (!f.isFile()) { call.reject("missing"); return; }
+            Uri uri = FileProvider.getUriForFile(getContext(), getContext().getPackageName() + ".fileprovider", f);
+            String mime = call.getString("mime", "application/octet-stream");
+            Intent view = new Intent(Intent.ACTION_VIEW);
+            view.setDataAndType(uri, mime);
+            view.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            Intent chooser = Intent.createChooser(view, "Open with");
+            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            getContext().startActivity(chooser);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("cannot open");
+        }
+    }
+
+    /** Vault fingerprint unlock: is a strong fingerprint set up on the phone, and is Vault unlock by fingerprint switched on. */
+    @PluginMethod
+    public void bioStatus(PluginCall call) {
+        boolean available = false, enabled = false;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                available = VaultBio.available(getContext());
+                enabled = available && VaultBio.enrolled(getContext());
+            } catch (Exception e) {
+                available = false;
+                enabled = false;
+            }
+        }
+        JSObject r = new JSObject();
+        r.put("available", available);
+        r.put("enabled", enabled);
+        call.resolve(r);
+    }
+
+    /** Locks the Vault data key (base64, sent right after the PIN was typed) behind a fingerprint. */
+    @PluginMethod
+    public void bioEnroll(final PluginCall call) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || getActivity() == null) { call.reject("unsupported"); return; }
+        String data = call.getString("data", "");
+        byte[] raw;
+        try {
+            raw = Base64.decode(data == null ? "" : data, Base64.NO_WRAP);
+        } catch (Exception e) {
+            call.reject("error");
+            return;
+        }
+        if (raw.length != 32) { call.reject("error"); return; }
+        VaultBio.enroll(getActivity(), raw, new VaultBio.Done() {
+            @Override public void ok(String ignored) { call.resolve(); }
+            @Override public void fail(String code) { call.reject(code); }
+        });
+    }
+
+    /** Shows the fingerprint prompt and returns the Vault data key (base64). */
+    @PluginMethod
+    public void bioUnlock(final PluginCall call) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || getActivity() == null) { call.reject("unsupported"); return; }
+        VaultBio.unlock(getActivity(), new VaultBio.Done() {
+            @Override public void ok(String data) {
+                JSObject r = new JSObject();
+                r.put("data", data);
+                call.resolve(r);
+            }
+            @Override public void fail(String code) { call.reject(code); }
+        });
+    }
+
+    @PluginMethod
+    public void bioDisable(PluginCall call) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try { VaultBio.disable(getContext()); } catch (Exception e) { /* nothing to remove */ }
+        }
+        call.resolve();
     }
 
     @PluginMethod
